@@ -1,11 +1,12 @@
 #include "dictionary_sharing_task.hpp"
 
-#include <string>
-#include <vector>
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <iterator>
-#include <algorithm>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #include "hyrise.hpp"
 #include "lossless_cast.hpp"
@@ -19,7 +20,6 @@ namespace opossum {
 // IDEA: Not only compare with previous segment but also with already created dictionaries. This would also allow cross column comparisons.
 // IDEA: set_union can be optimized if jaccard index threshold is not reachable by exiting earlier.
 
-
 template <typename T>
 struct SegmentChunkColumn {
   std::shared_ptr<DictionarySegment<T>> segment;
@@ -28,10 +28,10 @@ struct SegmentChunkColumn {
 };
 
 struct Memory_Usage_Stats {
-
   Memory_Usage_Stats() {}
 
-  Memory_Usage_Stats(long init_previous, long init_current) : previous(static_cast<double>(init_previous)), current(static_cast<double>(init_current)) {}
+  Memory_Usage_Stats(long init_previous, long init_current)
+      : previous(static_cast<double>(init_previous)), current(static_cast<double>(init_current)) {}
 
   double previous = 0.0;
   double current = 0.0;
@@ -56,14 +56,28 @@ size_t calc_dictionary_memory_usage(const std::shared_ptr<const pmr_vector<T>> d
   return dictionary->size() * sizeof(typename decltype(dictionary)::element_type::value_type);
 }
 
+bool _shared_dictionary_increases_attribute_vector_size(const size_t shared_dictionary_size,
+                                                        const size_t current_dictionary_size) {
+  if (current_dictionary_size <= std::numeric_limits<uint8_t>::max() &&
+      shared_dictionary_size > std::numeric_limits<uint8_t>::max()) {
+    return true;
+  }
+
+  if (current_dictionary_size <= std::numeric_limits<uint16_t>::max() &&
+      shared_dictionary_size > std::numeric_limits<uint16_t>::max()) {
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Returns the difference of the estimated memory usage.
  */
 template <typename T>
 Segment_Memory_Usage_Stats apply_shared_dictionary_to_segments(
-                        const std::vector<SegmentChunkColumn<T>>& segment_chunk_columns,
-                        const std::shared_ptr<const pmr_vector<T>> shared_dictionary,
-                        const PolymorphicAllocator<T>& allocator) {
+    const std::vector<SegmentChunkColumn<T>>& segment_chunk_columns,
+    const std::shared_ptr<const pmr_vector<T>> shared_dictionary, const PolymorphicAllocator<T>& allocator) {
   auto previous_attribute_vector_memory_usage = 0l;
   auto new_attribute_vector_memory_usage = 0l;
   auto previous_dictionary_memory_usage = 0l;
@@ -113,55 +127,71 @@ Segment_Memory_Usage_Stats apply_shared_dictionary_to_segments(
       new_attribute_vector_memory_usage - previous_attribute_vector_memory_usage;
   const auto dictionary_memory_usage_diff = new_dictionary_memory_usage - previous_dictionary_memory_usage;
 
-  const auto attribute_vector_relative_memory_diff = static_cast<double>(new_attribute_vector_memory_usage) * 100.0 / static_cast<double>(previous_attribute_vector_memory_usage);
-  const auto dictionary_relative_memory_diff = static_cast<double>(new_dictionary_memory_usage) * 100.0 / static_cast<double>(previous_dictionary_memory_usage);
+  const auto attribute_vector_relative_memory_diff = static_cast<double>(new_attribute_vector_memory_usage) * 100.0 /
+                                                     static_cast<double>(previous_attribute_vector_memory_usage);
+  const auto dictionary_relative_memory_diff =
+      static_cast<double>(new_dictionary_memory_usage) * 100.0 / static_cast<double>(previous_dictionary_memory_usage);
 
   Assert(dictionary_memory_usage_diff <= 0, "Dictionary grew in size, this should not happen.");
 
-  std::cout << "Merged " << segment_chunk_columns.size()
-          << " dictionaries for column "
-          << segment_chunk_columns[0].column_id
-          << ". (memory diff: "
-          << "dict=" << dictionary_memory_usage_diff << " bytes (" << dictionary_relative_memory_diff << "%), "
-          << "attr=" << attribute_vector_memory_usage_diff << " bytes (" << attribute_vector_relative_memory_diff << "%)"
-          << ")" << std::endl;
+  // TODO: output table name and column name
+  std::cout << "Merged " << segment_chunk_columns.size() << " dictionaries for column "
+            << segment_chunk_columns[0].column_id << ". (memory diff: "
+            << "dict=" << dictionary_memory_usage_diff << " bytes (" << dictionary_relative_memory_diff << "%), "
+            << "attr=" << attribute_vector_memory_usage_diff << " bytes (" << attribute_vector_relative_memory_diff
+            << "%)"
+            << ")" << std::endl;
 
   return Segment_Memory_Usage_Stats{
-    Memory_Usage_Stats {
-      previous_attribute_vector_memory_usage,
-      new_attribute_vector_memory_usage
-    },
-    Memory_Usage_Stats {
-      previous_dictionary_memory_usage,
-      new_dictionary_memory_usage
-    },
+      Memory_Usage_Stats{previous_attribute_vector_memory_usage, new_attribute_vector_memory_usage},
+      Memory_Usage_Stats{previous_dictionary_memory_usage, new_dictionary_memory_usage},
   };
 }
 
-double calc_jaccard_index(size_t union_size, size_t intersection_size) { return static_cast<double>(intersection_size) / static_cast<double>(union_size); }
+double calc_jaccard_index(size_t union_size, size_t intersection_size) {
+  return static_cast<double>(intersection_size) / static_cast<double>(union_size);
+}
 
 template <typename T>
 void log_jaccard_index(const double jaccard_index, const std::string& table_name, const std::string& column_name,
                        const std::string& compare_type, const DataType& column_data_type, const ChunkID chunk_id,
-                       const std::shared_ptr<DictionarySegment<T>> dictionary_segment, std::ofstream& output_file_stream) {
+                       const std::shared_ptr<DictionarySegment<T>> dictionary_segment,
+                       std::ofstream& output_file_stream) {
   const auto data_type_name = data_type_to_string.left.at(column_data_type);
   const auto dictionary = dictionary_segment->dictionary();
   output_file_stream << table_name << ";" << column_name << ";" << data_type_name << ";" << chunk_id << ";"
                      << compare_type << ";" << dictionary->size() << ";" << jaccard_index << std::endl;
 }
 
+template <typename T>
+bool should_merge(const double jaccard_index_threshold, const double jaccard_index,
+                  const size_t current_dictionary_size, const size_t shared_dictionary_size,
+                  std::vector<SegmentChunkColumn<T>> shared_segments) {
+  if (jaccard_index >= jaccard_index_threshold) {
+    if (!_shared_dictionary_increases_attribute_vector_size(shared_dictionary_size, current_dictionary_size)) {
+      return std::none_of(shared_segments.cbegin(), shared_segments.cend(),
+                          [shared_dictionary_size](const SegmentChunkColumn<T> segment) {
+                            return _shared_dictionary_increases_attribute_vector_size(
+                                shared_dictionary_size, segment.segment->dictionary()->size());
+                          });
+    }
+  }
+  return false;
+}
 
-void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_output_stream_opt, const double jaccard_index_threshold) {
+void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_output_stream_opt,
+                                               const double jaccard_index_threshold) {
+  std::cout << std::setprecision(4) << std::fixed;
   auto total_merged_dictionaries = 0ul;
   auto total_new_shared_dictionaries = 0ul;
   auto memory_usage_difference = Segment_Memory_Usage_Stats{};
 
   // Write output csv header
-  if (csv_output_stream_opt){
+  if (csv_output_stream_opt) {
     *csv_output_stream_opt << "Table;Column;DataType;Chunk;CompareType;DictionarySize;JaccardIndex\n";
   }
 
-   // Get tables using storage manager
+  // Get tables using storage manager
   auto& sm = Hyrise::get().storage_manager;
 
   auto table_names = sm.table_names();
@@ -216,10 +246,10 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
             const auto union_size = potential_new_shared_dictionary->size();
             current_jaccard_index = calc_jaccard_index(union_size, total_size - union_size);
             current_compare_type = "ExistingShared @ " + std::to_string(last_merged_index);
-            if (current_jaccard_index >= jaccard_index_threshold) {
+            if (should_merge(jaccard_index_threshold, current_jaccard_index, current_dictionary->size(), union_size,
+                             segments_to_merge_at[last_merged_index])) {
               potential_new_shared_dictionary_index = last_merged_index;
-            }
-            else{
+            } else {
               potential_new_shared_dictionary->clear();
             }
           }
@@ -237,11 +267,11 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
                 const auto union_size = potential_new_shared_dictionary->size();
                 current_jaccard_index = calc_jaccard_index(union_size, total_size - union_size);
                 current_compare_type = "ExistingShared @ " + std::to_string(shared_dictionary_index);
-                if (current_jaccard_index >= jaccard_index_threshold) {
+                if (should_merge(jaccard_index_threshold, current_jaccard_index, current_dictionary->size(), union_size,
+                                 segments_to_merge_at[shared_dictionary_index])) {
                   potential_new_shared_dictionary_index = shared_dictionary_index;
                   break;
-                }
-                else{
+                } else {
                   potential_new_shared_dictionary->clear();
                 }
               }
@@ -259,10 +289,10 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
             const auto union_size = potential_new_shared_dictionary->size();
             current_jaccard_index = calc_jaccard_index(union_size, total_size - union_size);
             current_compare_type = "NeighboringSegments";
-            if (current_jaccard_index >= jaccard_index_threshold) {
+            if (should_merge(jaccard_index_threshold, current_jaccard_index, current_dictionary->size(), union_size,
+                             std::vector<SegmentChunkColumn<ColumnDataType>>{*previous_segment_info_opt})) {
               merged_with_previous = true;
-            }
-            else{
+            } else {
               potential_new_shared_dictionary->clear();
             }
           }
@@ -292,9 +322,9 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
             }
           }
 
-          if (csv_output_stream_opt){
-              log_jaccard_index(current_jaccard_index, table_name, column_name, current_compare_type, column_data_type,
-                            chunk_id, current_dictionary_segment, *csv_output_stream_opt);
+          if (csv_output_stream_opt) {
+            log_jaccard_index(current_jaccard_index, table_name, column_name, current_compare_type, column_data_type,
+                              chunk_id, current_dictionary_segment, *csv_output_stream_opt);
           }
 
           previous_segment_info_opt = current_segment_info;
@@ -311,11 +341,16 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
           total_merged_dictionaries += segments_to_merge.size();
           total_new_shared_dictionaries++;
 
-          const auto new_segment_memory_usage = apply_shared_dictionary_to_segments<ColumnDataType>(segments_to_merge, shared_dictionary, allocator);
-          memory_usage_difference.attribute_vector_memory_usage.previous += new_segment_memory_usage.attribute_vector_memory_usage.previous;
-          memory_usage_difference.dictionary_memory_usage.previous += new_segment_memory_usage.dictionary_memory_usage.previous;
-          memory_usage_difference.attribute_vector_memory_usage.current += new_segment_memory_usage.attribute_vector_memory_usage.current;
-          memory_usage_difference.dictionary_memory_usage.current += new_segment_memory_usage.dictionary_memory_usage.current;
+          const auto new_segment_memory_usage =
+              apply_shared_dictionary_to_segments<ColumnDataType>(segments_to_merge, shared_dictionary, allocator);
+          memory_usage_difference.attribute_vector_memory_usage.previous +=
+              new_segment_memory_usage.attribute_vector_memory_usage.previous;
+          memory_usage_difference.dictionary_memory_usage.previous +=
+              new_segment_memory_usage.dictionary_memory_usage.previous;
+          memory_usage_difference.attribute_vector_memory_usage.current +=
+              new_segment_memory_usage.attribute_vector_memory_usage.current;
+          memory_usage_difference.dictionary_memory_usage.current +=
+              new_segment_memory_usage.dictionary_memory_usage.current;
         }
       });
     }
@@ -324,15 +359,32 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
   std::cout << "Merged " << total_merged_dictionaries << " dictionaries to " << total_new_shared_dictionaries
             << " shared dictionaries.\n";
   std::cout << "The estimated memory change is:\n"
-    << "- total: "
-    << ((memory_usage_difference.attribute_vector_memory_usage.current + memory_usage_difference.dictionary_memory_usage.current) - (memory_usage_difference.attribute_vector_memory_usage.previous + memory_usage_difference.dictionary_memory_usage.previous)) << " bytes / " 
-    << ((memory_usage_difference.attribute_vector_memory_usage.current + memory_usage_difference.dictionary_memory_usage.current) * 100.0 / (memory_usage_difference.attribute_vector_memory_usage.previous + memory_usage_difference.dictionary_memory_usage.previous)) << "%.\n"
-    << "- attribute vectors: "
-    << (memory_usage_difference.attribute_vector_memory_usage.current - memory_usage_difference.attribute_vector_memory_usage.previous) << " bytes / " 
-    << (memory_usage_difference.attribute_vector_memory_usage.current * 100.0 / memory_usage_difference.attribute_vector_memory_usage.previous) << "%\n"
-    << "- dictionaries: " 
-    << (memory_usage_difference.dictionary_memory_usage.current - memory_usage_difference.dictionary_memory_usage.previous) << " bytes / "
-    << (memory_usage_difference.dictionary_memory_usage.current * 100.0 / memory_usage_difference.dictionary_memory_usage.previous) << "%\n";
+            << "- total: "
+            << static_cast<long>((memory_usage_difference.attribute_vector_memory_usage.current +
+                 memory_usage_difference.dictionary_memory_usage.current) -
+                (memory_usage_difference.attribute_vector_memory_usage.previous +
+                 memory_usage_difference.dictionary_memory_usage.previous))
+            << " bytes / "
+            << ((memory_usage_difference.attribute_vector_memory_usage.current +
+                 memory_usage_difference.dictionary_memory_usage.current) *
+                100.0 /
+                (memory_usage_difference.attribute_vector_memory_usage.previous +
+                 memory_usage_difference.dictionary_memory_usage.previous))
+            << "%.\n"
+            << "- attribute vectors: "
+            << static_cast<long>(memory_usage_difference.attribute_vector_memory_usage.current -
+                memory_usage_difference.attribute_vector_memory_usage.previous)
+            << " bytes / "
+            << (memory_usage_difference.attribute_vector_memory_usage.current * 100.0 /
+                memory_usage_difference.attribute_vector_memory_usage.previous)
+            << "%\n"
+            << "- dictionaries: "
+            << static_cast<long>(memory_usage_difference.dictionary_memory_usage.current -
+                memory_usage_difference.dictionary_memory_usage.previous)
+            << " bytes / "
+            << (memory_usage_difference.dictionary_memory_usage.current * 100.0 /
+                memory_usage_difference.dictionary_memory_usage.previous)
+            << "%\n";
 }
 
-}
+}  // namespace opossum
