@@ -25,6 +25,7 @@ struct SegmentChunkColumn {
   std::shared_ptr<DictionarySegment<T>> segment;
   std::shared_ptr<Chunk> chunk;
   ColumnID column_id;
+  std::string column_name;
 };
 
 struct Memory_Usage_Stats {
@@ -77,7 +78,8 @@ bool _shared_dictionary_increases_attribute_vector_size(const size_t shared_dict
 template <typename T>
 Segment_Memory_Usage_Stats apply_shared_dictionary_to_segments(
     const std::vector<SegmentChunkColumn<T>>& segment_chunk_columns,
-    const std::shared_ptr<const pmr_vector<T>> shared_dictionary, const PolymorphicAllocator<T>& allocator) {
+    const std::shared_ptr<const pmr_vector<T>> shared_dictionary, const std::string& table_name,
+    const PolymorphicAllocator<T>& allocator) {
   auto previous_attribute_vector_memory_usage = 0l;
   auto new_attribute_vector_memory_usage = 0l;
   auto previous_dictionary_memory_usage = 0l;
@@ -135,8 +137,9 @@ Segment_Memory_Usage_Stats apply_shared_dictionary_to_segments(
   Assert(dictionary_memory_usage_diff <= 0, "Dictionary grew in size, this should not happen.");
 
   // TODO: output table name and column name
-  std::cout << "Merged " << segment_chunk_columns.size() << " dictionaries for column "
-            << segment_chunk_columns[0].column_id << ". (memory diff: "
+  std::cout << "Table \"" << table_name << "\" - Merged " << segment_chunk_columns.size()
+            << " dictionaries for column \"" << segment_chunk_columns[0].column_name << "\" ["
+            << segment_chunk_columns[0].column_id << "]. (memory diff: "
             << "dict=" << dictionary_memory_usage_diff << " bytes (" << dictionary_relative_memory_diff << "%), "
             << "attr=" << attribute_vector_memory_usage_diff << " bytes (" << attribute_vector_relative_memory_diff
             << "%)"
@@ -300,7 +303,7 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
           potential_new_shared_dictionary->shrink_to_fit();
 
           const auto current_segment_info =
-              SegmentChunkColumn<ColumnDataType>{current_dictionary_segment, chunk, column_id};
+              SegmentChunkColumn<ColumnDataType>{current_dictionary_segment, chunk, column_id, column_name};
           if (current_jaccard_index >= jaccard_index_threshold) {
             // The jaccard index matches the threshold, so we add the segment to the collection
 
@@ -341,8 +344,8 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
           total_merged_dictionaries += segments_to_merge.size();
           total_new_shared_dictionaries++;
 
-          const auto new_segment_memory_usage =
-              apply_shared_dictionary_to_segments<ColumnDataType>(segments_to_merge, shared_dictionary, allocator);
+          const auto new_segment_memory_usage = apply_shared_dictionary_to_segments<ColumnDataType>(
+              segments_to_merge, shared_dictionary, table_name, allocator);
           memory_usage_difference.attribute_vector_memory_usage.previous +=
               new_segment_memory_usage.attribute_vector_memory_usage.previous;
           memory_usage_difference.dictionary_memory_usage.previous +=
@@ -361,9 +364,9 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
   std::cout << "The estimated memory change is:\n"
             << "- total: "
             << static_cast<long>((memory_usage_difference.attribute_vector_memory_usage.current +
-                 memory_usage_difference.dictionary_memory_usage.current) -
-                (memory_usage_difference.attribute_vector_memory_usage.previous +
-                 memory_usage_difference.dictionary_memory_usage.previous))
+                                  memory_usage_difference.dictionary_memory_usage.current) -
+                                 (memory_usage_difference.attribute_vector_memory_usage.previous +
+                                  memory_usage_difference.dictionary_memory_usage.previous))
             << " bytes / "
             << ((memory_usage_difference.attribute_vector_memory_usage.current +
                  memory_usage_difference.dictionary_memory_usage.current) *
@@ -373,14 +376,14 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
             << "%.\n"
             << "- attribute vectors: "
             << static_cast<long>(memory_usage_difference.attribute_vector_memory_usage.current -
-                memory_usage_difference.attribute_vector_memory_usage.previous)
+                                 memory_usage_difference.attribute_vector_memory_usage.previous)
             << " bytes / "
             << (memory_usage_difference.attribute_vector_memory_usage.current * 100.0 /
                 memory_usage_difference.attribute_vector_memory_usage.previous)
             << "%\n"
             << "- dictionaries: "
             << static_cast<long>(memory_usage_difference.dictionary_memory_usage.current -
-                memory_usage_difference.dictionary_memory_usage.previous)
+                                 memory_usage_difference.dictionary_memory_usage.previous)
             << " bytes / "
             << (memory_usage_difference.dictionary_memory_usage.current * 100.0 /
                 memory_usage_difference.dictionary_memory_usage.previous)
