@@ -58,9 +58,14 @@ BenchmarkRunner::BenchmarkRunner(const BenchmarkConfig& config,
   _table_generator->generate_and_store();
   
   // dictionary sharing testing start
-  auto output_file_stream = std::ofstream("/home/Halil.Goecer/hyrise/jaccard_index_log.csv", std::ofstream::out | std::ofstream::trunc);
-  auto dictionary_sharing_task = DictionarySharingTask{};
-  dictionary_sharing_task.do_segment_sharing(std::make_optional<std::ofstream>(std::move(output_file_stream)));
+  if(config.enable_dictionary_sharing) {
+    auto output_file_stream = std::ofstream("/home/Halil.Goecer/hyrise/jaccard_index_log.csv", std::ofstream::out | std::ofstream::trunc);
+    auto dictionary_sharing_task = DictionarySharingTask {
+      config.jaccard_index_threshold,
+      config.check_for_attribute_vector_size_increase
+    };
+    dictionary_sharing_task.do_segment_sharing(std::make_optional<std::ofstream>(std::move(output_file_stream)));
+  }
   // dictionary sharing testing end
   
   _benchmark_item_runner->on_tables_loaded();
@@ -508,7 +513,10 @@ cxxopts::Options BenchmarkRunner::get_basic_cli_options(const std::string& bench
     ("visualize", "Create a visualization image of one LQP and PQP for each query, do not properly run the benchmark", cxxopts::value<bool>()->default_value("false")) // NOLINT
     ("verify", "Verify each query by comparing it with the SQLite result", cxxopts::value<bool>()->default_value("false")) // NOLINT
     ("dont_cache_binary_tables", "Do not cache tables as binary files for faster loading on subsequent runs", cxxopts::value<bool>()->default_value("false")) // NOLINT
-    ("metrics", "Track more metrics (steps in SQL pipeline, system utilization, etc.) and add them to the output JSON (see -o)", cxxopts::value<bool>()->default_value("false")); // NOLINT
+    ("metrics", "Track more metrics (steps in SQL pipeline, system utilization, etc.) and add them to the output JSON (see -o)", cxxopts::value<bool>()->default_value("false"))
+    ("enable_dictionary_sharing", "Enables dictionary sharing", cxxopts::value<bool>()->default_value("false")) // NOLINT
+    ("check_for_attribute_vector_size_increase", "Checks for attribute vector size increase", cxxopts::value<bool>()->default_value("true")) // NOLINT
+    ("jaccard_index_threshold", "Sets jaccard index threshold for dictionary sharing", cxxopts::value<double>()->default_value("0.5")); // NOLINT
   // clang-format on
 
   return cli_options;

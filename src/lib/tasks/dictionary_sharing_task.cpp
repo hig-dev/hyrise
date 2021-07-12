@@ -20,14 +20,6 @@ namespace opossum {
 // IDEA: Not only compare with previous segment but also with already created dictionaries. This would also allow cross column comparisons.
 // IDEA: set_union can be optimized if jaccard index threshold is not reachable by exiting earlier.
 
-template <typename T>
-struct SegmentChunkColumn {
-  std::shared_ptr<DictionarySegment<T>> segment;
-  std::shared_ptr<Chunk> chunk;
-  ColumnID column_id;
-  std::string column_name;
-};
-
 struct Memory_Usage_Stats {
   Memory_Usage_Stats() {}
 
@@ -42,6 +34,11 @@ struct Segment_Memory_Usage_Stats {
   Memory_Usage_Stats attribute_vector_memory_usage;
   Memory_Usage_Stats dictionary_memory_usage;
 };
+
+DictionarySharingTask::DictionarySharingTask(double init_jaccard_index_threshold,
+                                             bool init_check_for_attribute_vector_size_increase)
+    : jaccard_index_threshold(init_jaccard_index_threshold),
+      check_for_attribute_vector_size_increase(init_check_for_attribute_vector_size_increase) {}
 
 /**
  * copied from DictionarySegment::memory_usage
@@ -167,10 +164,11 @@ void log_jaccard_index(const double jaccard_index, const std::string& table_name
 }
 
 template <typename T>
-bool should_merge(const double jaccard_index_threshold, const double jaccard_index,
-                  const size_t current_dictionary_size, const size_t shared_dictionary_size,
-                  std::vector<SegmentChunkColumn<T>> shared_segments) {
+bool DictionarySharingTask::should_merge(const double jaccard_index, const size_t current_dictionary_size,
+                                         const size_t shared_dictionary_size,
+                                         std::vector<SegmentChunkColumn<T>> shared_segments) {
   if (jaccard_index >= jaccard_index_threshold) {
+    if (!check_for_attribute_vector_size_increase) return true;
     if (!_shared_dictionary_increases_attribute_vector_size(shared_dictionary_size, current_dictionary_size)) {
       return std::none_of(shared_segments.cbegin(), shared_segments.cend(),
                           [shared_dictionary_size](const SegmentChunkColumn<T> segment) {
@@ -182,8 +180,7 @@ bool should_merge(const double jaccard_index_threshold, const double jaccard_ind
   return false;
 }
 
-void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_output_stream_opt,
-                                               const double jaccard_index_threshold) {
+void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_output_stream_opt) {
   std::cout << std::setprecision(4) << std::fixed;
   auto total_merged_dictionaries = 0ul;
   auto total_new_shared_dictionaries = 0ul;
@@ -249,7 +246,7 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
             const auto union_size = potential_new_shared_dictionary->size();
             current_jaccard_index = calc_jaccard_index(union_size, total_size - union_size);
             current_compare_type = "ExistingShared @ " + std::to_string(last_merged_index);
-            if (should_merge(jaccard_index_threshold, current_jaccard_index, current_dictionary->size(), union_size,
+            if (should_merge(current_jaccard_index, current_dictionary->size(), union_size,
                              segments_to_merge_at[last_merged_index])) {
               potential_new_shared_dictionary_index = last_merged_index;
             } else {
@@ -270,7 +267,7 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
                 const auto union_size = potential_new_shared_dictionary->size();
                 current_jaccard_index = calc_jaccard_index(union_size, total_size - union_size);
                 current_compare_type = "ExistingShared @ " + std::to_string(shared_dictionary_index);
-                if (should_merge(jaccard_index_threshold, current_jaccard_index, current_dictionary->size(), union_size,
+                if (should_merge(current_jaccard_index, current_dictionary->size(), union_size,
                                  segments_to_merge_at[shared_dictionary_index])) {
                   potential_new_shared_dictionary_index = shared_dictionary_index;
                   break;
@@ -292,7 +289,7 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
             const auto union_size = potential_new_shared_dictionary->size();
             current_jaccard_index = calc_jaccard_index(union_size, total_size - union_size);
             current_compare_type = "NeighboringSegments";
-            if (should_merge(jaccard_index_threshold, current_jaccard_index, current_dictionary->size(), union_size,
+            if (should_merge(current_jaccard_index, current_dictionary->size(), union_size,
                              std::vector<SegmentChunkColumn<ColumnDataType>>{*previous_segment_info_opt})) {
               merged_with_previous = true;
             } else {
