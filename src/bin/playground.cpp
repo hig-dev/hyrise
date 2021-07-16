@@ -18,7 +18,7 @@ int main() {
   std::cout << "Playground: Jaccard-Index" << std::endl;
 
   // Generate benchmark data
-  const auto table_path = std::string{"/home/Halil.Goecer/imdb_bin/"};
+  const auto table_path = std::string{"/home/Halil.Goecer/imdb_test/"};
 
   const auto table_generator = std::make_unique<FileBasedTableGenerator>(
       std::make_shared<BenchmarkConfig>(BenchmarkConfig::get_default_config()), table_path);
@@ -26,7 +26,7 @@ int main() {
 
   auto output_file_stream = std::ofstream("/home/Halil.Goecer/hyrise/jaccard_index_log.csv", std::ofstream::out | std::ofstream::trunc);
 
-  auto dictionary_sharing_task = DictionarySharingTask{};
+  auto dictionary_sharing_task = DictionarySharingTask{0.1, true};
   dictionary_sharing_task.do_segment_sharing(std::make_optional<std::ofstream>(std::move(output_file_stream)));
   output_file_stream.close();
   return 0;

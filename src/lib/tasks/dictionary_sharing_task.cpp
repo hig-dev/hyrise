@@ -65,7 +65,7 @@ bool _shared_dictionary_increases_attribute_vector_size(const size_t shared_dict
       shared_dictionary_size > std::numeric_limits<uint16_t>::max()) {
     return true;
   }
-
+  
   return false;
 }
 
@@ -233,13 +233,15 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
           auto current_jaccard_index = 0.0;
           auto current_compare_type = std::string{};
 
-          auto potential_new_shared_dictionary = std::make_shared<pmr_vector<ColumnDataType>>(allocator);
           auto potential_new_shared_dictionary_index = -1;
+          std::shared_ptr<pmr_vector<ColumnDataType>> potential_new_shared_dictionary = nullptr;
+          auto merge_segment = false;
 
           // Try to merge with last shared dictionary
           if (last_merged_index >= 0) {
             //TODO(hig): Fix code duplication
             auto shared_dictionary = shared_dictionaries[last_merged_index];
+            potential_new_shared_dictionary = std::make_shared<pmr_vector<ColumnDataType>>(allocator);
             std::set_union(current_dictionary->cbegin(), current_dictionary->cend(), shared_dictionary->cbegin(),
                            shared_dictionary->cend(), std::back_inserter(*potential_new_shared_dictionary));
             const auto total_size = current_dictionary->size() + shared_dictionary->size();
@@ -249,8 +251,7 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
             if (should_merge(current_jaccard_index, current_dictionary->size(), union_size,
                              segments_to_merge_at[last_merged_index])) {
               potential_new_shared_dictionary_index = last_merged_index;
-            } else {
-              potential_new_shared_dictionary->clear();
+              merge_segment = true;
             }
           }
 
@@ -261,6 +262,7 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
                  shared_dictionary_index >= 0; --shared_dictionary_index) {
               if (shared_dictionary_index != last_merged_index) {
                 auto shared_dictionary = shared_dictionaries[shared_dictionary_index];
+                potential_new_shared_dictionary = std::make_shared<pmr_vector<ColumnDataType>>(allocator);
                 std::set_union(current_dictionary->cbegin(), current_dictionary->cend(), shared_dictionary->cbegin(),
                                shared_dictionary->cend(), std::back_inserter(*potential_new_shared_dictionary));
                 const auto total_size = current_dictionary->size() + shared_dictionary->size();
@@ -270,9 +272,8 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
                 if (should_merge(current_jaccard_index, current_dictionary->size(), union_size,
                                  segments_to_merge_at[shared_dictionary_index])) {
                   potential_new_shared_dictionary_index = shared_dictionary_index;
+                  merge_segment = true;
                   break;
-                } else {
-                  potential_new_shared_dictionary->clear();
                 }
               }
             }
@@ -283,6 +284,7 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
           if (potential_new_shared_dictionary_index < 0 && previous_segment_info_opt) {
             // If the merge with the last shared dictionary was not successful, try to merge the neighboring segments.
             const auto previous_dictionary = previous_segment_info_opt->segment->dictionary();
+            potential_new_shared_dictionary = std::make_shared<pmr_vector<ColumnDataType>>(allocator);
             std::set_union(current_dictionary->cbegin(), current_dictionary->cend(), previous_dictionary->cbegin(),
                            previous_dictionary->cend(), std::back_inserter(*potential_new_shared_dictionary));
             const auto total_size = current_dictionary->size() + previous_dictionary->size();
@@ -292,18 +294,18 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
             if (should_merge(current_jaccard_index, current_dictionary->size(), union_size,
                              std::vector<SegmentChunkColumn<ColumnDataType>>{*previous_segment_info_opt})) {
               merged_with_previous = true;
-            } else {
-              potential_new_shared_dictionary->clear();
+              merge_segment = true;
             }
           }
 
-          potential_new_shared_dictionary->shrink_to_fit();
+          
 
           const auto current_segment_info =
               SegmentChunkColumn<ColumnDataType>{current_dictionary_segment, chunk, column_id, column_name};
-          if (current_jaccard_index >= jaccard_index_threshold) {
+          if (merge_segment) {
+            Assert(potential_new_shared_dictionary != nullptr, "potential_new_shared_dictionary is nullptr");
             // The jaccard index matches the threshold, so we add the segment to the collection
-
+            potential_new_shared_dictionary->shrink_to_fit();
             if (potential_new_shared_dictionary_index < 0) {
               shared_dictionaries.emplace_back(potential_new_shared_dictionary);
               segments_to_merge_at.emplace_back(std::vector<SegmentChunkColumn<ColumnDataType>>{current_segment_info});
