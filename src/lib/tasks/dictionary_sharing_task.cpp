@@ -45,11 +45,8 @@ DictionarySharingTask::DictionarySharingTask(double init_jaccard_index_threshold
  */
 template <typename T>
 size_t calc_dictionary_memory_usage(const std::shared_ptr<const pmr_vector<T>> dictionary) {
-  // TODO(hig): It can happen that the new dictionary is bigger than the old one, although the dictionaries have the same values
-  // Is there maybe a string compression?
-
   if constexpr (std::is_same_v<T, pmr_string>) {
-    return string_vector_memory_usage(*dictionary, MemoryUsageCalculationMode::Sampled);
+    return string_vector_memory_usage(*dictionary, MemoryUsageCalculationMode::Full);
   }
   return dictionary->size() * sizeof(typename decltype(dictionary)::element_type::value_type);
 }
@@ -65,7 +62,7 @@ bool _shared_dictionary_increases_attribute_vector_size(const size_t shared_dict
       shared_dictionary_size > std::numeric_limits<uint16_t>::max()) {
     return true;
   }
-  
+
   return false;
 }
 
@@ -77,6 +74,8 @@ Segment_Memory_Usage_Stats apply_shared_dictionary_to_segments(
     const std::vector<SegmentChunkColumn<T>>& segment_chunk_columns,
     const std::shared_ptr<const pmr_vector<T>> shared_dictionary, const std::string& table_name,
     const PolymorphicAllocator<T>& allocator) {
+  Assert(segment_chunk_columns.size() >= 2, "At least 2 segments should be merged.");
+  auto previous_dictionary_entries_count = 0ul;
   auto previous_attribute_vector_memory_usage = 0l;
   auto new_attribute_vector_memory_usage = 0l;
   auto previous_dictionary_memory_usage = 0l;
@@ -86,6 +85,7 @@ Segment_Memory_Usage_Stats apply_shared_dictionary_to_segments(
   for (auto segment_chunk_column : segment_chunk_columns) {
     const auto segment = segment_chunk_column.segment;
     const auto chunk_size = segment->size();
+    previous_dictionary_entries_count += segment->dictionary()->size();
 
     // Construct new attribute vector that maps to the shared dictionary
     auto uncompressed_attribute_vector = pmr_vector<uint32_t>{allocator};
@@ -97,7 +97,7 @@ Segment_Memory_Usage_Stats apply_shared_dictionary_to_segments(
         // Find and add new value id using binary search
         const auto search_iter =
             std::lower_bound(shared_dictionary->cbegin(), shared_dictionary->cend(), search_value_opt.value());
-        DebugAssert(search_iter != shared_dictionary->end(), "Merged dictionary does not contain value.");
+        Assert(search_iter != shared_dictionary->end(), "Shared dictionary does not contain value.");
         const auto found_index = std::distance(shared_dictionary->cbegin(), search_iter);
         uncompressed_attribute_vector.emplace_back(found_index);
       } else {
@@ -131,7 +131,10 @@ Segment_Memory_Usage_Stats apply_shared_dictionary_to_segments(
   const auto dictionary_relative_memory_diff =
       static_cast<double>(new_dictionary_memory_usage) * 100.0 / static_cast<double>(previous_dictionary_memory_usage);
 
-  Assert(dictionary_memory_usage_diff <= 0, "Dictionary grew in size, this should not happen.");
+  Assert(shared_dictionary->size() < previous_dictionary_entries_count,
+         "Shared dictionary should have less entries than the merged dictionaries.");
+  Assert(dictionary_memory_usage_diff <= 0,
+         "Dictionary grew in size, this should not happen: " + std::to_string(dictionary_memory_usage_diff));
 
   // TODO: output table name and column name
   std::cout << "Table \"" << table_name << "\" - Merged " << segment_chunk_columns.size()
@@ -180,10 +183,36 @@ bool DictionarySharingTask::should_merge(const double jaccard_index, const size_
   return false;
 }
 
+std::string bytes_to_pretty_string(int64_t size_in_bytes) {
+  const auto is_negative = size_in_bytes < 0;
+  if (is_negative) {
+    size_in_bytes = std::abs(size_in_bytes);
+  }
+  auto suffix = std::array<std::string, 6>{"bytes", "KB", "MB", "GB", "TB", "PB"};
+
+  auto bytes_double = static_cast<double>(size_in_bytes);
+
+  auto i = 0u;
+  if (size_in_bytes > 1024) {
+    for (; (size_in_bytes / 1024) > 0 && i < suffix.size() - 1; i++, size_in_bytes /= 1024)
+      bytes_double = size_in_bytes / 1024.0;
+  }
+
+  std::ostringstream out;
+  out << std::setprecision(3) << std::fixed;
+  if (is_negative) {
+    out << "-";
+  }
+  out << bytes_double << " " << suffix[i];
+  return out.str();
+}
+
 void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_output_stream_opt) {
   std::cout << std::setprecision(4) << std::fixed;
   auto total_merged_dictionaries = 0ul;
   auto total_new_shared_dictionaries = 0ul;
+  auto total_previous_dictionary_memory_usage = 0ul;
+  auto total_previous_attribute_vector_memory_usage = 0ul;
   auto memory_usage_difference = Segment_Memory_Usage_Stats{};
 
   // Write output csv header
@@ -230,6 +259,10 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
             continue;
           }
           const auto current_dictionary = current_dictionary_segment->dictionary();
+
+          total_previous_dictionary_memory_usage += calc_dictionary_memory_usage(current_dictionary);
+          total_previous_attribute_vector_memory_usage += current_dictionary_segment->attribute_vector()->data_size();
+
           auto current_jaccard_index = 0.0;
           auto current_compare_type = std::string{};
 
@@ -298,8 +331,6 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
             }
           }
 
-          
-
           const auto current_segment_info =
               SegmentChunkColumn<ColumnDataType>{current_dictionary_segment, chunk, column_id, column_name};
           if (merge_segment) {
@@ -360,30 +391,91 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
 
   std::cout << "Merged " << total_merged_dictionaries << " dictionaries to " << total_new_shared_dictionaries
             << " shared dictionaries.\n";
+  const auto total_previous_memory_usage =
+      total_previous_attribute_vector_memory_usage + total_previous_dictionary_memory_usage;
+  const auto merged_previous_memory_usage = memory_usage_difference.attribute_vector_memory_usage.previous +
+                                            memory_usage_difference.dictionary_memory_usage.previous;
+  const auto merged_current_memory_usage = memory_usage_difference.attribute_vector_memory_usage.current +
+                                           memory_usage_difference.dictionary_memory_usage.current;
+
+  const auto merged_memory_difference = merged_current_memory_usage - merged_previous_memory_usage;
+  const auto total_current_memory_usage = total_previous_memory_usage + merged_memory_difference;
   std::cout << "The estimated memory change is:\n"
-            << "- total: "
-            << static_cast<long>((memory_usage_difference.attribute_vector_memory_usage.current +
-                                  memory_usage_difference.dictionary_memory_usage.current) -
-                                 (memory_usage_difference.attribute_vector_memory_usage.previous +
-                                  memory_usage_difference.dictionary_memory_usage.previous))
-            << " bytes / "
-            << ((memory_usage_difference.attribute_vector_memory_usage.current +
-                 memory_usage_difference.dictionary_memory_usage.current) *
-                100.0 /
-                (memory_usage_difference.attribute_vector_memory_usage.previous +
-                 memory_usage_difference.dictionary_memory_usage.previous))
-            << "%.\n"
-            << "- attribute vectors: "
-            << static_cast<long>(memory_usage_difference.attribute_vector_memory_usage.current -
-                                 memory_usage_difference.attribute_vector_memory_usage.previous)
-            << " bytes / "
-            << (memory_usage_difference.attribute_vector_memory_usage.current * 100.0 /
-                memory_usage_difference.attribute_vector_memory_usage.previous)
-            << "%\n"
-            << "- dictionaries: "
-            << static_cast<long>(memory_usage_difference.dictionary_memory_usage.current -
-                                 memory_usage_difference.dictionary_memory_usage.previous)
-            << " bytes / "
+            << "- total (sum of dictionaries and attribute vectors):\n"
+            << "  > total chunks:\n"
+            << "    > previous size: " << bytes_to_pretty_string(static_cast<int64_t>(total_previous_memory_usage))
+            << "\n"
+            << "    > current size:  " << bytes_to_pretty_string(static_cast<int64_t>(total_current_memory_usage))
+            << "\n"
+            << "    > difference:    "
+            << bytes_to_pretty_string(static_cast<int64_t>(total_current_memory_usage - total_previous_memory_usage))
+            << "\n"
+            << "    > percentage:    " << (total_current_memory_usage * 100.0 / total_previous_memory_usage) << "%\n"
+            << "  > merged chunks:\n"
+            << "    > previous size: " << bytes_to_pretty_string(static_cast<int64_t>(merged_previous_memory_usage))
+            << "\n"
+            << "    > current size:  " << bytes_to_pretty_string(static_cast<int64_t>(merged_current_memory_usage))
+            << "\n"
+            << "    > difference:    " << bytes_to_pretty_string(static_cast<int64_t>(merged_memory_difference)) << "\n"
+            << "    > percentage:    " << (merged_current_memory_usage * 100.0 / merged_previous_memory_usage) << "%\n";
+
+  const auto merged_attribute_vector_memory_difference = memory_usage_difference.attribute_vector_memory_usage.current -
+                                                         memory_usage_difference.attribute_vector_memory_usage.previous;
+  const auto total_current_attribute_vector_memory_usage =
+      total_previous_attribute_vector_memory_usage + merged_attribute_vector_memory_difference;
+  std::cout
+      << "- attribute vectors:\n"
+      << "  > total chunks:\n"
+      << "    > previous size: "
+      << bytes_to_pretty_string(static_cast<int64_t>(total_previous_attribute_vector_memory_usage)) << "\n"
+      << "    > current size:  "
+      << bytes_to_pretty_string(static_cast<int64_t>(total_current_attribute_vector_memory_usage)) << "\n"
+      << "    > difference:    "
+      << bytes_to_pretty_string(static_cast<int64_t>(total_current_attribute_vector_memory_usage -
+                                                     total_previous_attribute_vector_memory_usage))
+      << "\n"
+      << "    > percentage:    "
+      << (total_current_attribute_vector_memory_usage * 100.0 / total_previous_attribute_vector_memory_usage) << "%\n"
+      << "  > merged chunks:\n"
+      << "    > previous size: "
+      << bytes_to_pretty_string(static_cast<int64_t>(memory_usage_difference.attribute_vector_memory_usage.previous))
+      << "\n"
+      << "    > current size:  "
+      << bytes_to_pretty_string(static_cast<int64_t>(memory_usage_difference.attribute_vector_memory_usage.current))
+      << "\n"
+      << "    > difference:    "
+      << bytes_to_pretty_string(static_cast<int64_t>(merged_attribute_vector_memory_difference)) << "\n"
+      << "    > percentage:    "
+      << (memory_usage_difference.attribute_vector_memory_usage.current * 100.0 /
+          memory_usage_difference.attribute_vector_memory_usage.previous)
+      << "%\n";
+
+  const auto merged_dictionary_memory_difference = memory_usage_difference.dictionary_memory_usage.current -
+                                                   memory_usage_difference.dictionary_memory_usage.previous;
+  const auto total_current_dictionary_memory_usage =
+      total_previous_dictionary_memory_usage + merged_dictionary_memory_difference;
+  std::cout << "- dictionaries:\n"
+            << "  > total chunks:\n"
+            << "    > previous size: "
+            << bytes_to_pretty_string(static_cast<int64_t>(total_previous_dictionary_memory_usage)) << "\n"
+            << "    > current size:  "
+            << bytes_to_pretty_string(static_cast<int64_t>(total_current_dictionary_memory_usage)) << "\n"
+            << "    > difference:    "
+            << bytes_to_pretty_string(
+                   static_cast<int64_t>(total_current_dictionary_memory_usage - total_previous_dictionary_memory_usage))
+            << "\n"
+            << "    > percentage:    "
+            << (total_current_dictionary_memory_usage * 100.0 / total_previous_dictionary_memory_usage) << "%\n"
+            << "  > merged chunks:\n"
+            << "    > previous size: "
+            << bytes_to_pretty_string(static_cast<int64_t>(memory_usage_difference.dictionary_memory_usage.previous))
+            << "\n"
+            << "    > current size:  "
+            << bytes_to_pretty_string(static_cast<int64_t>(memory_usage_difference.dictionary_memory_usage.current))
+            << "\n"
+            << "    > difference:    "
+            << bytes_to_pretty_string(static_cast<int64_t>(merged_dictionary_memory_difference)) << "\n"
+            << "    > percentage:    "
             << (memory_usage_difference.dictionary_memory_usage.current * 100.0 /
                 memory_usage_difference.dictionary_memory_usage.previous)
             << "%\n";
