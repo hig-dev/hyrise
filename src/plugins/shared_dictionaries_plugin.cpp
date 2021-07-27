@@ -117,7 +117,6 @@ std::pair<int32_t, std::shared_ptr<pmr_vector<T>>> SharedDictionariesPlugin::_co
         best_shared_dictionary_index = static_cast<int32_t>(shared_dictionary_index);
         best_jaccard_index = jaccard_index;
         best_shared_dictionary = union_result;
-        break;
       }
     }
   }
