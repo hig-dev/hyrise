@@ -66,6 +66,7 @@ void SharedDictionariesPlugin::_process_column(const std::shared_ptr<Table> tabl
     auto merged_current_dictionary = false;
     if (best_shared_dictionary_index >= 0 && best_shared_dictionary) {
       // Merge with existing shared dictionary
+      best_shared_dictionary->shrink_to_fit();
       shared_dictionaries[best_shared_dictionary_index] = best_shared_dictionary;
       segments_to_merge_at[best_shared_dictionary_index].push_back(current_segment_info);
       merged_current_dictionary = true;
@@ -75,6 +76,7 @@ void SharedDictionariesPlugin::_process_column(const std::shared_ptr<Table> tabl
           _compare_with_previous_dictionary(current_dictionary, *previous_segment_info_opt, allocator);
       if (shared_dictionary_with_previous) {
         // Merge with previous dictionary
+        shared_dictionary_with_previous->shrink_to_fit();
         shared_dictionaries.emplace_back(shared_dictionary_with_previous);
         segments_to_merge_at.emplace_back(
             std::vector<SegmentToMergeInfo<T>>{current_segment_info, *previous_segment_info_opt});
@@ -103,6 +105,7 @@ std::pair<int32_t, std::shared_ptr<pmr_vector<T>>> SharedDictionariesPlugin::_co
        ++shared_dictionary_index) {
     auto shared_dictionary = shared_dictionaries[shared_dictionary_index];
     auto union_result = std::make_shared<pmr_vector<T>>(allocator);
+    union_result->reserve(std::max(current_dictionary->size(), shared_dictionary->size()));
     std::set_union(current_dictionary->cbegin(), current_dictionary->cend(), shared_dictionary->cbegin(),
                    shared_dictionary->cend(), std::back_inserter(*union_result));
     const auto total_size = current_dictionary->size() + shared_dictionary->size();
@@ -129,6 +132,7 @@ std::shared_ptr<pmr_vector<T>> SharedDictionariesPlugin::_compare_with_previous_
   std::shared_ptr<pmr_vector<T>> result_shared_dictionary = nullptr;
   const auto previous_dictionary = previous_segment_info.segment->dictionary();
   auto union_result = std::make_shared<pmr_vector<T>>(allocator);
+  union_result->reserve(std::max(current_dictionary->size(), previous_dictionary->size()));
   std::set_union(current_dictionary->cbegin(), current_dictionary->cend(), previous_dictionary->cbegin(),
                  previous_dictionary->cend(), std::back_inserter(*union_result));
   const auto total_size = current_dictionary->size() + previous_dictionary->size();
@@ -148,7 +152,7 @@ void SharedDictionariesPlugin::_apply_shared_dictionaries(
   Assert(shared_dictionaries.size() == segments_to_merge_at.size(),
          "The two vectors used for the merging must have the same size.");
   const auto shared_dictionaries_size = shared_dictionaries.size();
-  _num_shared_dictionaries = shared_dictionaries_size;
+  _num_shared_dictionaries += shared_dictionaries_size;
   for (auto shared_dictionary_index = 0u; shared_dictionary_index < shared_dictionaries_size;
        ++shared_dictionary_index) {
     const auto shared_dictionary = shared_dictionaries[shared_dictionary_index];

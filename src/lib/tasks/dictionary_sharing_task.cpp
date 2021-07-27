@@ -478,7 +478,7 @@ void DictionarySharingTask::do_segment_sharing(std::optional<std::ofstream> csv_
             << "    > percentage:    "
             << (memory_usage_difference.dictionary_memory_usage.current * 100.0 /
                 memory_usage_difference.dictionary_memory_usage.previous)
-            << "%\n";
+            << "%" << std::endl;
 }
 
 }  // namespace opossum
