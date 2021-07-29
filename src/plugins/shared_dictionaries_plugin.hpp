@@ -45,8 +45,9 @@ class SharedDictionariesPlugin : public AbstractPlugin {
   double jaccard_index_threshold;
 
  private:
+  const char* _env_variable_name = "JACCARD_INDEX_THRESHOLD";
   uint64_t _total_bytes_saved = 0ul;
-  uint64_t _total_previous_bytes = 0u;
+  uint64_t _total_previous_bytes = 0ul;
   uint64_t _modified_previous_bytes = 0u;
   uint32_t _num_merged_dictionaries = 0u;
   uint32_t _num_shared_dictionaries = 0u;
@@ -88,7 +89,7 @@ class SharedDictionariesPlugin : public AbstractPlugin {
   bool _should_merge(const double jaccard_index, const size_t current_dictionary_size,
                      const size_t shared_dictionary_size, const std::vector<SegmentToMergeInfo<T>>& shared_segments);
 
-  void print_processing_result();
+  void _print_processing_result();
 };
 
 }  // namespace opossum

@@ -8,6 +8,10 @@ std::string SharedDictionariesPlugin::description() const { return "Shared dicti
 
 void SharedDictionariesPlugin::start() {
   std::cout << "SHARED DICTIONARIES PLUGIN: Processing starts" << std::endl;
+  const auto env_jaccard_index_treshold = std::getenv(_env_variable_name);
+  if (env_jaccard_index_treshold){
+    jaccard_index_threshold = std::stod(env_jaccard_index_treshold);
+  }
   std::cout << "Jaccard-index threshold is set to: " << jaccard_index_threshold << std::endl;
   _process_for_every_column();
   std::cout << "SHARED DICTIONARIES PLUGIN: Processing ended:" << std::endl;
@@ -128,7 +132,6 @@ template <typename T>
 std::shared_ptr<pmr_vector<T>> SharedDictionariesPlugin::_compare_with_previous_dictionary(
     const std::shared_ptr<const pmr_vector<T>> current_dictionary, const SegmentToMergeInfo<T>& previous_segment_info,
     const PolymorphicAllocator<T>& allocator) {
-  std::shared_ptr<pmr_vector<T>> result_shared_dictionary = nullptr;
   const auto previous_dictionary = previous_segment_info.segment->dictionary();
   auto union_result = std::make_shared<pmr_vector<T>>(allocator);
   union_result->reserve(std::max(current_dictionary->size(), previous_dictionary->size()));
@@ -258,7 +261,7 @@ bool SharedDictionariesPlugin::_should_merge(const double jaccard_index, const s
   return false;
 }
 
-void SharedDictionariesPlugin::print_processing_result() {
+void SharedDictionariesPlugin::_print_processing_result() {
   const auto total_save_percentage =
       (static_cast<double>(_total_bytes_saved) / static_cast<double>(_total_previous_bytes)) * 100.0;
   const auto modified_save_percentage =

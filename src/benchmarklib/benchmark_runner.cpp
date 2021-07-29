@@ -59,12 +59,9 @@ BenchmarkRunner::BenchmarkRunner(const BenchmarkConfig& config,
   
   // dictionary sharing testing start
   if(config.enable_dictionary_sharing) {
-    auto output_file_stream = std::ofstream("/home/Halil.Goecer/hyrise/jaccard_index_log.csv", std::ofstream::out | std::ofstream::trunc);
-    auto dictionary_sharing_task = DictionarySharingTask {
-      config.jaccard_index_threshold,
-      config.check_for_attribute_vector_size_increase
-    };
-    dictionary_sharing_task.do_segment_sharing(std::make_optional<std::ofstream>(std::move(output_file_stream)));
+    auto& pm = Hyrise::get().plugin_manager;
+    pm.load_plugin("./build/Release/lib/libhyriseSharedDictionariesPlugin.so");
+    pm.unload_plugin("hyriseSharedDictionariesPlugin");
   }
   // dictionary sharing testing end
   
