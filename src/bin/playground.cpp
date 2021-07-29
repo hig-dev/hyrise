@@ -13,7 +13,6 @@
 
 using namespace opossum;  // NOLINT
 
-
 int main() {
   std::cout << "Playground: Jaccard-Index" << std::endl;
 
@@ -28,8 +27,7 @@ int main() {
 
   //auto dictionary_sharing_task = DictionarySharingTask{0.01, true};
   //dictionary_sharing_task.do_segment_sharing(std::make_optional<std::ofstream>(std::move(output_file_stream)));
-  
- 
+
   auto& pm = Hyrise::get().plugin_manager;
   pm.load_plugin("./build/Release/lib/libhyriseSharedDictionariesPlugin.so");
   pm.unload_plugin("hyriseSharedDictionariesPlugin");

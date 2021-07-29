@@ -56,15 +56,15 @@ BenchmarkRunner::BenchmarkRunner(const BenchmarkConfig& config,
   }
 
   _table_generator->generate_and_store();
-  
+
   // dictionary sharing testing start
-  if(config.enable_dictionary_sharing) {
+  if (config.enable_dictionary_sharing) {
     auto& pm = Hyrise::get().plugin_manager;
     pm.load_plugin("./build/Release/lib/libhyriseSharedDictionariesPlugin.so");
     pm.unload_plugin("hyriseSharedDictionariesPlugin");
   }
   // dictionary sharing testing end
-  
+
   _benchmark_item_runner->on_tables_loaded();
 
   // SQLite data is only loaded if the dedicated result set is not complete, i.e,

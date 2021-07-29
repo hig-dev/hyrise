@@ -131,16 +131,16 @@ BenchmarkConfig CLIConfigParser::parse_cli_options(const cxxopts::ParseResult& p
   } else {
     std::cout << "- Not tracking SQL metrics" << std::endl;
   }
-  
 
   // dictionary sharing config begin
-  
+
   const auto enable_dictionary_sharing = parse_result["enable_dictionary_sharing"].as<bool>();
-  if(enable_dictionary_sharing) {
+  if (enable_dictionary_sharing) {
     std::cout << "- [DictionarySharing] enabled" << std::endl;
   }
 
-  const auto check_for_attribute_vector_size_increase = parse_result["check_for_attribute_vector_size_increase"].as<bool>();
+  const auto check_for_attribute_vector_size_increase =
+      parse_result["check_for_attribute_vector_size_increase"].as<bool>();
   if (enable_dictionary_sharing && check_for_attribute_vector_size_increase) {
     std::cout << "- [DictionarySharing] enabled check for attribute vector size increase" << std::endl;
   }
@@ -149,17 +149,30 @@ BenchmarkConfig CLIConfigParser::parse_cli_options(const cxxopts::ParseResult& p
   if (jaccard_index_threshold <= 0) {
     jaccard_index_threshold = default_config.jaccard_index_threshold;
   }
-  if(enable_dictionary_sharing){
+  if (enable_dictionary_sharing) {
     std::cout << "- [DictionarySharing] Jaccard index threshold: " << jaccard_index_threshold << std::endl;
   }
 
   // dictionary sharing config end
 
-
-  return BenchmarkConfig{
-      benchmark_mode,  chunk_size,          *encoding_config, indexes, max_runs, timeout_duration,
-      warmup_duration, output_file_path,    enable_scheduler, cores,   clients,  enable_visualization,
-      verify,          cache_binary_tables, metrics, enable_dictionary_sharing, check_for_attribute_vector_size_increase, jaccard_index_threshold};
+  return BenchmarkConfig{benchmark_mode,
+                         chunk_size,
+                         *encoding_config,
+                         indexes,
+                         max_runs,
+                         timeout_duration,
+                         warmup_duration,
+                         output_file_path,
+                         enable_scheduler,
+                         cores,
+                         clients,
+                         enable_visualization,
+                         verify,
+                         cache_binary_tables,
+                         metrics,
+                         enable_dictionary_sharing,
+                         check_for_attribute_vector_size_increase,
+                         jaccard_index_threshold};
 }
 
 EncodingConfig CLIConfigParser::parse_encoding_config(const std::string& encoding_file_str) {

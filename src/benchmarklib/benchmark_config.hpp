@@ -23,8 +23,9 @@ class BenchmarkConfig {
                   const Duration& init_max_duration, const Duration& init_warmup_duration,
                   const std::optional<std::string>& init_output_file_path, const bool init_enable_scheduler,
                   const uint32_t init_cores, const uint32_t init_clients, const bool init_enable_visualization,
-                  const bool init_verify, const bool init_cache_binary_tables, const bool init_metrics, const bool init_enable_dictionary_sharing,
-                  const bool init_check_for_attribute_vector_size_increase, const double init_jaccard_index_threshold);
+                  const bool init_verify, const bool init_cache_binary_tables, const bool init_metrics,
+                  const bool init_enable_dictionary_sharing, const bool init_check_for_attribute_vector_size_increase,
+                  const double init_jaccard_index_threshold);
 
   static BenchmarkConfig get_default_config();
 

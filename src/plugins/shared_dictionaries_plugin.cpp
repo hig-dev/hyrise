@@ -8,14 +8,14 @@ std::string SharedDictionariesPlugin::description() const { return "Shared dicti
 
 void SharedDictionariesPlugin::start() {
   std::cout << "SHARED DICTIONARIES PLUGIN: Processing starts" << std::endl;
-  const auto env_jaccard_index_treshold = std::getenv(_env_variable_name);
-  if (env_jaccard_index_treshold){
-    jaccard_index_threshold = std::stod(env_jaccard_index_treshold);
+  const auto env_jaccard_index_threshold = std::getenv(_env_variable_name);
+  if (env_jaccard_index_threshold) {
+    jaccard_index_threshold = std::stod(env_jaccard_index_threshold);
   }
   std::cout << "Jaccard-index threshold is set to: " << jaccard_index_threshold << std::endl;
   _process_for_every_column();
   std::cout << "SHARED DICTIONARIES PLUGIN: Processing ended:" << std::endl;
-  print_processing_result();
+  _print_processing_result();
 }
 
 void SharedDictionariesPlugin::stop() {
