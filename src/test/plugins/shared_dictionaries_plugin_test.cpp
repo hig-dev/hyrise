@@ -30,7 +30,7 @@ class SharedDictionariesTest : public BaseTest {
   const std::vector<std::string> _table_names{"part", "partsupp", "customer", "orders"};
   const std::string _tables_path{"resources/test_data/tbl/tpch/sf-0.001/"};
   const std::string _table_extension{".tbl"};
-  const size_t _chunk_size = 32;
+  const size_t _chunk_size = 256;
 
   void _add_test_tables() {
     auto& sm = Hyrise::get().storage_manager;
@@ -66,6 +66,18 @@ class SharedDictionariesTest : public BaseTest {
 
 TEST_F(SharedDictionariesTest, LoadUnloadPlugin) {
   auto& pm = Hyrise::get().plugin_manager;
+  pm.load_plugin(build_dylib_path("libhyriseSharedDictionariesPlugin"));
+  _validate();
+  pm.unload_plugin("hyriseSharedDictionariesPlugin");
+}
+
+TEST_F(SharedDictionariesTest, ReloadPlugin) {
+  auto& pm = Hyrise::get().plugin_manager;
+
+  pm.load_plugin(build_dylib_path("libhyriseSharedDictionariesPlugin"));
+  _validate();
+  pm.unload_plugin("hyriseSharedDictionariesPlugin");
+
   pm.load_plugin(build_dylib_path("libhyriseSharedDictionariesPlugin"));
   _validate();
   pm.unload_plugin("hyriseSharedDictionariesPlugin");

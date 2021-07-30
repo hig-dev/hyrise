@@ -16,6 +16,7 @@ struct SegmentToMergeInfo {
   std::shared_ptr<Chunk> chunk;
   ColumnID column_id;
   std::string column_name;
+  bool already_merged;
 };
 
 /*
@@ -39,6 +40,8 @@ class SharedDictionariesPlugin : public AbstractPlugin {
 
   void stop() final;
 
+  void reset();
+
   StorageManager& storage_manager;
 
   // Threshold for the similarity metric between dictionaries
@@ -59,19 +62,25 @@ class SharedDictionariesPlugin : public AbstractPlugin {
                        const std::string& column_name);
 
   template <typename T>
-  std::pair<int32_t, std::shared_ptr<pmr_vector<T>>> _compare_with_existing_shared_dictionaries(
+  void _initialize_shared_dictionaries(std::vector<std::shared_ptr<const pmr_vector<T>>>& shared_dictionaries,
+                                       std::vector<std::vector<SegmentToMergeInfo<T>>>& segments_to_merge_at,
+                                       const std::shared_ptr<Table> table, const ColumnID column_id,
+                                       const std::string& column_name);
+
+  template <typename T>
+  std::pair<int32_t, std::shared_ptr<const pmr_vector<T>>> _compare_with_existing_shared_dictionaries(
       const std::shared_ptr<const pmr_vector<T>> current_dictionary,
-      const std::vector<std::shared_ptr<pmr_vector<T>>>& shared_dictionaries,
+      const std::vector<std::shared_ptr<const pmr_vector<T>>>& shared_dictionaries,
       const std::vector<std::vector<SegmentToMergeInfo<T>>>& segments_to_merge_at,
       const PolymorphicAllocator<T>& allocator);
 
   template <typename T>
-  std::shared_ptr<pmr_vector<T>> _compare_with_previous_dictionary(
+  std::shared_ptr<const pmr_vector<T>> _compare_with_previous_dictionary(
       const std::shared_ptr<const pmr_vector<T>> current_dictionary, const SegmentToMergeInfo<T>& previous_segment_info,
       const PolymorphicAllocator<T>& allocator);
 
   template <typename T>
-  void _apply_shared_dictionaries(const std::vector<std::shared_ptr<pmr_vector<T>>>& shared_dictionaries,
+  void _apply_shared_dictionaries(const std::vector<std::shared_ptr<const pmr_vector<T>>>& shared_dictionaries,
                                   const std::vector<std::vector<SegmentToMergeInfo<T>>>& segments_to_merge_at,
                                   const std::string& table_name, const PolymorphicAllocator<T>& allocator);
 

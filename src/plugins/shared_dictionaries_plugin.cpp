@@ -7,6 +7,7 @@ namespace opossum {
 std::string SharedDictionariesPlugin::description() const { return "Shared dictionaries plugin"; }
 
 void SharedDictionariesPlugin::start() {
+  reset();
   std::cout << "SHARED DICTIONARIES PLUGIN: Processing starts" << std::endl;
   const auto env_jaccard_index_threshold = std::getenv(_env_variable_name);
   if (env_jaccard_index_threshold) {
@@ -18,9 +19,7 @@ void SharedDictionariesPlugin::start() {
   _print_processing_result();
 }
 
-void SharedDictionariesPlugin::stop() {
-  // TODO (hig): clean up shared dictionaries plugin
-}
+void SharedDictionariesPlugin::stop() { reset(); }
 
 void SharedDictionariesPlugin::_process_for_every_column() {
   auto table_names = storage_manager.table_names();
@@ -43,8 +42,9 @@ template <typename T>
 void SharedDictionariesPlugin::_process_column(const std::shared_ptr<Table> table, const std::string& table_name,
                                                const ColumnID column_id, const std::string& column_name) {
   const auto allocator = PolymorphicAllocator<T>{};
-  auto shared_dictionaries = std::vector<std::shared_ptr<pmr_vector<T>>>{};
   auto segments_to_merge_at = std::vector<std::vector<SegmentToMergeInfo<T>>>{};
+  auto shared_dictionaries = std::vector<std::shared_ptr<const pmr_vector<T>>>{};
+  _initialize_shared_dictionaries(shared_dictionaries, segments_to_merge_at, table, column_id, column_name);
 
   std::optional<SegmentToMergeInfo<T>> previous_segment_info_opt = std::nullopt;
 
@@ -52,58 +52,82 @@ void SharedDictionariesPlugin::_process_column(const std::shared_ptr<Table> tabl
   for (auto chunk_id = ChunkID{0}; chunk_id < chunk_count; ++chunk_id) {
     const auto chunk = table->get_chunk(chunk_id);
     const auto segment = chunk->get_segment(column_id);
+    _total_previous_bytes += segment->memory_usage(MemoryUsageCalculationMode::Full);
 
     auto current_dictionary_segment = std::dynamic_pointer_cast<DictionarySegment<T>>(segment);
-    if (!current_dictionary_segment) {
-      std::cerr << "Not a dictionary segment! " << chunk_id << "/" << column_id << std::endl;
-      continue;
-    }
+    if (current_dictionary_segment && !current_dictionary_segment->uses_dictionary_sharing()) {
+      const auto current_dictionary = current_dictionary_segment->dictionary();
+      const auto current_segment_info =
+          SegmentToMergeInfo<T>{current_dictionary_segment, chunk, column_id, column_name, false};
 
-    const auto current_dictionary = current_dictionary_segment->dictionary();
-    const auto current_segment_info = SegmentToMergeInfo<T>{current_dictionary_segment, chunk, column_id, column_name};
+      const auto [best_shared_dictionary_index, best_shared_dictionary] = _compare_with_existing_shared_dictionaries<T>(
+          current_dictionary, shared_dictionaries, segments_to_merge_at, allocator);
 
-    _total_previous_bytes += current_dictionary_segment->memory_usage(MemoryUsageCalculationMode::Full);
-
-    const auto [best_shared_dictionary_index, best_shared_dictionary] = _compare_with_existing_shared_dictionaries<T>(
-        current_dictionary, shared_dictionaries, segments_to_merge_at, allocator);
-
-    auto merged_current_dictionary = false;
-    if (best_shared_dictionary_index >= 0 && best_shared_dictionary) {
-      // Merge with existing shared dictionary
-      best_shared_dictionary->shrink_to_fit();
-      shared_dictionaries[best_shared_dictionary_index] = best_shared_dictionary;
-      segments_to_merge_at[best_shared_dictionary_index].push_back(current_segment_info);
-      merged_current_dictionary = true;
-    } else if (previous_segment_info_opt) {
-      // Check with previous segment
-      const auto shared_dictionary_with_previous =
-          _compare_with_previous_dictionary(current_dictionary, *previous_segment_info_opt, allocator);
-      if (shared_dictionary_with_previous) {
-        // Merge with previous dictionary
-        shared_dictionary_with_previous->shrink_to_fit();
-        shared_dictionaries.emplace_back(shared_dictionary_with_previous);
-        segments_to_merge_at.emplace_back(
-            std::vector<SegmentToMergeInfo<T>>{current_segment_info, *previous_segment_info_opt});
+      auto merged_current_dictionary = false;
+      if (best_shared_dictionary_index >= 0 && best_shared_dictionary) {
+        // Merge with existing shared dictionary
+        shared_dictionaries[best_shared_dictionary_index] = best_shared_dictionary;
+        segments_to_merge_at[best_shared_dictionary_index].push_back(current_segment_info);
         merged_current_dictionary = true;
+      } else if (previous_segment_info_opt) {
+        // Check with previous segment
+        const auto shared_dictionary_with_previous =
+            _compare_with_previous_dictionary(current_dictionary, *previous_segment_info_opt, allocator);
+        if (shared_dictionary_with_previous) {
+          // Merge with previous dictionary
+          shared_dictionaries.emplace_back(shared_dictionary_with_previous);
+          segments_to_merge_at.emplace_back(
+              std::vector<SegmentToMergeInfo<T>>{current_segment_info, *previous_segment_info_opt});
+          merged_current_dictionary = true;
+        }
       }
+
+      // Save unmerged current dictionary for possible later merge
+      previous_segment_info_opt = merged_current_dictionary ? std::nullopt : std::make_optional(current_segment_info);
     }
-
-    // Save unmerged current dictionary for possible later merge
-    previous_segment_info_opt = merged_current_dictionary ? std::nullopt : std::make_optional(current_segment_info);
   }
-
   _apply_shared_dictionaries(shared_dictionaries, segments_to_merge_at, table_name, allocator);
 }
 
 template <typename T>
-std::pair<int32_t, std::shared_ptr<pmr_vector<T>>> SharedDictionariesPlugin::_compare_with_existing_shared_dictionaries(
+void SharedDictionariesPlugin::_initialize_shared_dictionaries(
+    std::vector<std::shared_ptr<const pmr_vector<T>>>& shared_dictionaries,
+    std::vector<std::vector<SegmentToMergeInfo<T>>>& segments_to_merge_at, const std::shared_ptr<Table> table,
+    const ColumnID column_id, const std::string& column_name) {
+  auto shared_dictionaries_set = std::set<std::shared_ptr<const pmr_vector<T>>>{};
+  auto existing_merged_segments = 0;
+  const auto chunk_count = table->chunk_count();
+  for (auto chunk_id = ChunkID{0}; chunk_id < chunk_count; ++chunk_id) {
+    const auto chunk = table->get_chunk(chunk_id);
+    const auto segment = chunk->get_segment(column_id);
+
+    auto dictionary_segment = std::dynamic_pointer_cast<DictionarySegment<T>>(segment);
+    if (dictionary_segment && dictionary_segment->uses_dictionary_sharing()) {
+      existing_merged_segments++;
+      const auto [iter, inserted] = shared_dictionaries_set.insert(dictionary_segment->dictionary());
+      const auto segment_info = SegmentToMergeInfo<T>{dictionary_segment, chunk, column_id, column_name, true};
+      if (inserted) {
+        segments_to_merge_at.emplace_back(std::vector<SegmentToMergeInfo<T>>{segment_info});
+      } else {
+        const auto insert_index = std::distance(shared_dictionaries_set.begin(), iter);
+        segments_to_merge_at[insert_index].push_back(segment_info);
+      }
+    }
+  }
+  shared_dictionaries.insert(shared_dictionaries.begin(), shared_dictionaries_set.begin(),
+                             shared_dictionaries_set.end());
+}
+
+template <typename T>
+std::pair<int32_t, std::shared_ptr<const pmr_vector<T>>>
+SharedDictionariesPlugin::_compare_with_existing_shared_dictionaries(
     const std::shared_ptr<const pmr_vector<T>> current_dictionary,
-    const std::vector<std::shared_ptr<pmr_vector<T>>>& shared_dictionaries,
+    const std::vector<std::shared_ptr<const pmr_vector<T>>>& shared_dictionaries,
     const std::vector<std::vector<SegmentToMergeInfo<T>>>& segments_to_merge_at,
     const PolymorphicAllocator<T>& allocator) {
   auto best_shared_dictionary_index = -1;
   auto best_jaccard_index = -1;
-  std::shared_ptr<pmr_vector<T>> best_shared_dictionary = nullptr;
+  std::shared_ptr<const pmr_vector<T>> best_shared_dictionary = nullptr;
 
   for (auto shared_dictionary_index = 0ul; shared_dictionary_index < shared_dictionaries.size();
        ++shared_dictionary_index) {
@@ -120,6 +144,7 @@ std::pair<int32_t, std::shared_ptr<pmr_vector<T>>> SharedDictionariesPlugin::_co
                         segments_to_merge_at[shared_dictionary_index])) {
         best_shared_dictionary_index = static_cast<int32_t>(shared_dictionary_index);
         best_jaccard_index = jaccard_index;
+        union_result->shrink_to_fit();
         best_shared_dictionary = union_result;
       }
     }
@@ -129,7 +154,7 @@ std::pair<int32_t, std::shared_ptr<pmr_vector<T>>> SharedDictionariesPlugin::_co
 }
 
 template <typename T>
-std::shared_ptr<pmr_vector<T>> SharedDictionariesPlugin::_compare_with_previous_dictionary(
+std::shared_ptr<const pmr_vector<T>> SharedDictionariesPlugin::_compare_with_previous_dictionary(
     const std::shared_ptr<const pmr_vector<T>> current_dictionary, const SegmentToMergeInfo<T>& previous_segment_info,
     const PolymorphicAllocator<T>& allocator) {
   const auto previous_dictionary = previous_segment_info.segment->dictionary();
@@ -140,52 +165,65 @@ std::shared_ptr<pmr_vector<T>> SharedDictionariesPlugin::_compare_with_previous_
   const auto total_size = current_dictionary->size() + previous_dictionary->size();
   const auto union_size = union_result->size();
   const auto jaccard_index = _calc_jaccard_index(union_size, total_size - union_size);
-  return _should_merge(jaccard_index, current_dictionary->size(), union_size,
-                       std::vector<SegmentToMergeInfo<T>>{previous_segment_info})
-             ? union_result
-             : nullptr;
+  if (_should_merge(jaccard_index, current_dictionary->size(), union_size,
+                    std::vector<SegmentToMergeInfo<T>>{previous_segment_info})) {
+    union_result->shrink_to_fit();
+    return union_result;
+  } else {
+    return nullptr;
+  }
 }
 
 template <typename T>
 void SharedDictionariesPlugin::_apply_shared_dictionaries(
-    const std::vector<std::shared_ptr<pmr_vector<T>>>& shared_dictionaries,
+    const std::vector<std::shared_ptr<const pmr_vector<T>>>& shared_dictionaries,
     const std::vector<std::vector<SegmentToMergeInfo<T>>>& segments_to_merge_at, const std::string& table_name,
     const PolymorphicAllocator<T>& allocator) {
   Assert(shared_dictionaries.size() == segments_to_merge_at.size(),
          "The two vectors used for the merging must have the same size.");
   const auto shared_dictionaries_size = shared_dictionaries.size();
-  _num_shared_dictionaries += shared_dictionaries_size;
   for (auto shared_dictionary_index = 0u; shared_dictionary_index < shared_dictionaries_size;
        ++shared_dictionary_index) {
     const auto shared_dictionary = shared_dictionaries[shared_dictionary_index];
     const auto segments_to_merge = segments_to_merge_at[shared_dictionary_index];
     Assert(segments_to_merge.size() >= 2, "At least 2 segments should be merged.");
-    _num_merged_dictionaries += segments_to_merge.size();
+    if (std::any_of(segments_to_merge.cbegin(), segments_to_merge.cend(),
+                    [](const SegmentToMergeInfo<T> segment) { return !segment.already_merged; })) {
+      _num_shared_dictionaries++;
+      auto shared_dictionary_memory_usage = _calc_dictionary_memory_usage<T>(shared_dictionary);
+      const auto new_dictionary_memory_usage = shared_dictionary_memory_usage;
 
-    auto previous_dictionary_memory_usage = 0ul;
-    const auto new_dictionary_memory_usage = _calc_dictionary_memory_usage<T>(shared_dictionary);
+      auto previous_dictionary_memory_usage = 0ul;
+      if (std::any_of(segments_to_merge.cbegin(), segments_to_merge.cend(),
+                      [](const SegmentToMergeInfo<T> segment) { return segment.already_merged; })) {
+        previous_dictionary_memory_usage += shared_dictionary_memory_usage;
+      }
 
-    for (auto segment_to_merge : segments_to_merge) {
-      const auto segment = segment_to_merge.segment;
-      previous_dictionary_memory_usage += _calc_dictionary_memory_usage(segment->dictionary());
-      _modified_previous_bytes += segment->memory_usage(MemoryUsageCalculationMode::Full);
+      for (auto segment_to_merge : segments_to_merge) {
+        const auto segment = segment_to_merge.segment;
+        _num_merged_dictionaries++;
+        if (!segment_to_merge.already_merged){
+          previous_dictionary_memory_usage += _calc_dictionary_memory_usage(segment->dictionary());
+          _modified_previous_bytes += segment->memory_usage(MemoryUsageCalculationMode::Full);
+        }
 
-      // Create new dictionary encoded segment with adjusted attribute vector and shared dictionary
-      const auto new_attribute_vector = _create_new_attribute_vector<T>(segment, shared_dictionary, allocator);
-      const auto new_dictionary_segment =
-          std::make_shared<DictionarySegment<T>>(shared_dictionary, new_attribute_vector);
+        // Create new dictionary encoded segment with adjusted attribute vector and shared dictionary
+        const auto new_attribute_vector = _create_new_attribute_vector<T>(segment, shared_dictionary, allocator);
+        const auto new_dictionary_segment =
+            std::make_shared<DictionarySegment<T>>(shared_dictionary, new_attribute_vector, true);
 
-      // Replace segment in chunk
-      segment_to_merge.chunk->replace_segment(segment_to_merge.column_id, new_dictionary_segment);
+        // Replace segment in chunk
+        segment_to_merge.chunk->replace_segment(segment_to_merge.column_id, new_dictionary_segment);
+      }
+
+      Assert(new_dictionary_memory_usage < previous_dictionary_memory_usage,
+             "New dictionary memory usage should be lower than previous");
+      const auto bytes_saved = previous_dictionary_memory_usage - new_dictionary_memory_usage;
+      _total_bytes_saved += bytes_saved;
+
+      std::cout << "Merged " << segments_to_merge.size() << " dictionaries saving " << bytes_saved
+                << " bytes @ Table=" << table_name << ", Column=" << segments_to_merge[0].column_name << std::endl;
     }
-
-    Assert(new_dictionary_memory_usage < previous_dictionary_memory_usage,
-           "New dictionary memory usage should be lower than previous");
-    const auto bytes_saved = previous_dictionary_memory_usage - new_dictionary_memory_usage;
-    _total_bytes_saved += bytes_saved;
-
-    std::cout << "Merged " << segments_to_merge.size() << " dictionaries saving " << bytes_saved
-              << " bytes @ Table=" << table_name << ", Column=" << segments_to_merge[0].column_name << std::endl;
   }
 }
 
@@ -263,13 +301,25 @@ bool SharedDictionariesPlugin::_should_merge(const double jaccard_index, const s
 
 void SharedDictionariesPlugin::_print_processing_result() {
   const auto total_save_percentage =
-      (static_cast<double>(_total_bytes_saved) / static_cast<double>(_total_previous_bytes)) * 100.0;
+      _total_previous_bytes == 0
+          ? 0.0
+          : (static_cast<double>(_total_bytes_saved) / static_cast<double>(_total_previous_bytes)) * 100.0;
   const auto modified_save_percentage =
-      (static_cast<double>(_total_bytes_saved) / static_cast<double>(_modified_previous_bytes)) * 100.0;
+      _modified_previous_bytes == 0
+          ? 0.0
+          : (static_cast<double>(_total_bytes_saved) / static_cast<double>(_modified_previous_bytes)) * 100.0;
+
   std::cout << "Merged " << _num_merged_dictionaries << " dictionaries to " << _num_shared_dictionaries
             << " shared dictionaries\n";
   std::cout << "Saved " << _total_bytes_saved << " bytes (" << std::ceil(modified_save_percentage) << "% of modified, "
             << std::ceil(total_save_percentage) << "% of total)" << std::endl;
+}
+void SharedDictionariesPlugin::reset() {
+  _total_bytes_saved = 0ul;
+  _total_previous_bytes = 0ul;
+  _modified_previous_bytes = 0u;
+  _num_merged_dictionaries = 0u;
+  _num_shared_dictionaries = 0u;
 }
 
 EXPORT_PLUGIN(SharedDictionariesPlugin)
