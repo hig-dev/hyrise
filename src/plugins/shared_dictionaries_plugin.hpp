@@ -9,14 +9,29 @@
 
 namespace opossum {
 
-// Contains the dictionary encoded segment with its chunk and column information
 template <typename T>
-struct SegmentToMergeInfo {
-  std::shared_ptr<DictionarySegment<T>> segment;
-  std::shared_ptr<Chunk> chunk;
+using SegmentChunkPair = std::pair<std::shared_ptr<DictionarySegment<T>>, std::shared_ptr<Chunk>>;
+
+// Merge plan for a shared dictionary containing the segments to merge and additional information
+template <typename T>
+struct MergePlan {
+ public:
+  std::shared_ptr<const pmr_vector<T>> shared_dictionary;
+  std::vector<SegmentChunkPair<T>> segment_chunk_pairs_to_merge;
   ColumnID column_id;
   std::string column_name;
-  bool already_merged;
+  bool contains_non_merged_segment;
+  bool contains_already_merged_segment;
+  uint64_t non_merged_total_bytes = 0ul;
+  uint64_t non_merged_dictionary_bytes = 0ul;
+
+  MergePlan(const std::shared_ptr<const pmr_vector<T>>& init_shared_dictionary, const ColumnID& init_column_id,
+            const std::string& init_column_name)
+      : shared_dictionary(init_shared_dictionary), column_id(init_column_id), column_name(init_column_name) {
+    segment_chunk_pairs_to_merge = {};
+    contains_non_merged_segment = false;
+    contains_already_merged_segment = false;
+  }
 };
 
 /*
@@ -62,27 +77,23 @@ class SharedDictionariesPlugin : public AbstractPlugin {
                        const std::string& column_name);
 
   template <typename T>
-  void _initialize_shared_dictionaries(std::vector<std::shared_ptr<const pmr_vector<T>>>& shared_dictionaries,
-                                       std::vector<std::vector<SegmentToMergeInfo<T>>>& segments_to_merge_at,
-                                       const std::shared_ptr<Table> table, const ColumnID column_id,
-                                       const std::string& column_name);
+  void _initialize_merge_plans(std::vector<std::shared_ptr<MergePlan<T>>>& merge_plans,
+                               const std::shared_ptr<Table> table, const ColumnID column_id,
+                               const std::string& column_name);
 
   template <typename T>
-  std::pair<int32_t, std::shared_ptr<const pmr_vector<T>>> _compare_with_existing_shared_dictionaries(
+  std::pair<int32_t, std::shared_ptr<const pmr_vector<T>>> _compare_with_existing_merge_plans(
       const std::shared_ptr<const pmr_vector<T>> current_dictionary,
-      const std::vector<std::shared_ptr<const pmr_vector<T>>>& shared_dictionaries,
-      const std::vector<std::vector<SegmentToMergeInfo<T>>>& segments_to_merge_at,
-      const PolymorphicAllocator<T>& allocator);
+      const std::vector<std::shared_ptr<MergePlan<T>>>& merge_plans, const PolymorphicAllocator<T>& allocator);
 
   template <typename T>
   std::shared_ptr<const pmr_vector<T>> _compare_with_previous_dictionary(
-      const std::shared_ptr<const pmr_vector<T>> current_dictionary, const SegmentToMergeInfo<T>& previous_segment_info,
-      const PolymorphicAllocator<T>& allocator);
+      const std::shared_ptr<const pmr_vector<T>> current_dictionary,
+      const SegmentChunkPair<T> previous_segment_chunk_pair, const PolymorphicAllocator<T>& allocator);
 
   template <typename T>
-  void _apply_shared_dictionaries(const std::vector<std::shared_ptr<const pmr_vector<T>>>& shared_dictionaries,
-                                  const std::vector<std::vector<SegmentToMergeInfo<T>>>& segments_to_merge_at,
-                                  const std::string& table_name, const PolymorphicAllocator<T>& allocator);
+  void _process_merge_plans(const std::vector<std::shared_ptr<MergePlan<T>>>& merge_plans,
+                            const std::string& table_name, const PolymorphicAllocator<T>& allocator);
 
   template <typename T>
   std::shared_ptr<const BaseCompressedVector> _create_new_attribute_vector(
@@ -96,7 +107,12 @@ class SharedDictionariesPlugin : public AbstractPlugin {
 
   template <typename T>
   bool _should_merge(const double jaccard_index, const size_t current_dictionary_size,
-                     const size_t shared_dictionary_size, const std::vector<SegmentToMergeInfo<T>>& shared_segments);
+                     const size_t shared_dictionary_size,
+                     const std::vector<SegmentChunkPair<T>>& shared_segment_chunk_pairs);
+
+  template <typename T>
+  void _add_segment_chunk_pair(MergePlan<T>& merge_plan, const SegmentChunkPair<T>& segment_chunk_pair,
+                               bool is_already_merged);
 
   void _print_processing_result();
 };
