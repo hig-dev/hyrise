@@ -315,7 +315,7 @@ void SharedDictionariesColumnProcessor<T>::_add_segment_chunk_pair(MergePlan<T>&
 
 template <typename T>
 double SharedDictionariesColumnProcessor<T>::_calc_jaccard_index(size_t union_size, size_t intersection_size) {
-  DebugAssert(union_size >= intersection_size, "Union size should be larger than intersection size.");
+  DebugAssert(union_size >= intersection_size, "Union size should be larger than or equal intersection size.");
   return union_size == 0 ? 0.0 : static_cast<double>(intersection_size) / static_cast<double>(union_size);
 }
 
