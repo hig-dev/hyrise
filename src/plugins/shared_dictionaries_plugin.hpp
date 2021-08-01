@@ -10,6 +10,17 @@
 
 namespace opossum {
 
+/* TODO
+ * 1. Plugin settings für jaccard index threshold hinzufügen mit default Wert (z.B. 0.4)
+ *   -> auto start compression
+ *   -> all tables / included tables / excluded tables
+ *   -> jaccard index threshold
+ *   -> detailed output csv stream
+ *   -> attribute vector
+ *   -> track compression statistics
+ * 2. Alle std::cout mit LogManager ersetzen
+ * */
+
 template <typename T>
 using SegmentChunkPair = std::pair<std::shared_ptr<DictionarySegment<T>>, std::shared_ptr<Chunk>>;
 
@@ -24,19 +35,26 @@ struct SharedDictionariesStats {
 };
 
 /*
+ * The intention of this plugin is to save memory by using "dictionary sharing"
+ * while trying to not decrease the performance of Hyrise.
+ *
  * Per default every dictionary encoded segment in Hyrise has its own dictionary.
  * This plugin compares the dictionaries within a column for their similarity
  * using the jaccard-index. If the jaccard-index is equal or higher than the
  * specified threshold and additionally if the merging does not increase the width
  * of the attribute vector, this plugin creates a shared dictionary. Then, the plugin
  * replaces the dictionary segment with a new dictionary segment that has a shared
- * dictionary. The intention of this plugin is to save memory while trying to not
- * decrease the performance of Hyrise.
+ * dictionary.
+ *
+ * With the start of the plugin, the dictionary sharing compressor is automatically
+ * started for every table in the database.
  */
 class SharedDictionariesPlugin : public AbstractPlugin {
  public:
   explicit SharedDictionariesPlugin(double init_jaccard_index_threshold = 0.1)
-      : storage_manager(Hyrise::get().storage_manager), jaccard_index_threshold(init_jaccard_index_threshold) {
+      : storage_manager(Hyrise::get().storage_manager),
+        log_manager(Hyrise::get().log_manager),
+        jaccard_index_threshold(init_jaccard_index_threshold) {
     stats = std::make_shared<SharedDictionariesStats>();
   }
 
@@ -47,6 +65,7 @@ class SharedDictionariesPlugin : public AbstractPlugin {
   void stop() final;
 
   StorageManager& storage_manager;
+  LogManager& log_manager;
 
   // Threshold for the similarity metric between dictionaries
   double jaccard_index_threshold;
@@ -56,7 +75,8 @@ class SharedDictionariesPlugin : public AbstractPlugin {
  private:
   void _process_for_every_column();
 
-  void _print_processing_result();
+  void _log_plugin_configuration();
+  void _log_processing_result();
 };
 
 // Merge plan for a shared dictionary containing the segments to merge and additional information

@@ -29,7 +29,9 @@ int main() {
   //dictionary_sharing_task.do_segment_sharing(std::make_optional<std::ofstream>(std::move(output_file_stream)));
 
   auto& pm = Hyrise::get().plugin_manager;
-  pm.load_plugin("./build/Release/lib/libhyriseSharedDictionariesPlugin.so");
+  std::cout << "loading SharedDictionariesPlugin" << std::endl;
+  pm.load_plugin("lib/libhyriseSharedDictionariesPlugin.so");
+  std::cout << "unloading SharedDictionariesPlugin" << std::endl;
   pm.unload_plugin("hyriseSharedDictionariesPlugin");
 
   output_file_stream.close();

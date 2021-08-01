@@ -4,28 +4,36 @@
 
 namespace opossum {
 
+const std::string LOG_NAME = "SharedDictionariesPlugin";
 std::string SharedDictionariesPlugin::description() const { return "Shared dictionaries plugin"; }
 
 void SharedDictionariesPlugin::start() {
   stats = std::make_shared<SharedDictionariesStats>();
-  std::cout << "SHARED DICTIONARIES PLUGIN: Processing starts" << std::endl;
-  std::cout << "Jaccard-index threshold is set to: " << jaccard_index_threshold << std::endl;
+  _log_plugin_configuration();
   _process_for_every_column();
-  std::cout << "SHARED DICTIONARIES PLUGIN: Processing ended:" << std::endl;
-  _print_processing_result();
+  _log_processing_result();
 }
 
 void SharedDictionariesPlugin::stop() {}
 
 void SharedDictionariesPlugin::_process_for_every_column() {
+  log_manager.add_message(LOG_NAME, "Starting database compression", LogLevel::Info);
   auto table_names = storage_manager.table_names();
   std::sort(table_names.begin(), table_names.end());
   for (const auto& table_name : table_names) {
+    {
+      auto log_message = "> compressing table: " + table_name;
+      log_manager.add_message(LOG_NAME, log_message, LogLevel::Debug);
+    }
     const auto table = storage_manager.get_table(table_name);
     const auto column_count = table->column_count();
     for (auto column_id = ColumnID{0}; column_id < column_count; ++column_id) {
       const auto column_data_type = table->column_definitions()[column_id].data_type;
       const auto column_name = table->column_definitions()[column_id].name;
+      {
+        auto log_message = "  - compressing column: " + column_name;
+        log_manager.add_message(LOG_NAME, log_message, LogLevel::Debug);
+      }
       resolve_data_type(column_data_type, [&](const auto type) {
         using ColumnDataType = typename decltype(type)::type;
         auto column_processor = SharedDictionariesColumnProcessor<ColumnDataType>{
@@ -34,9 +42,17 @@ void SharedDictionariesPlugin::_process_for_every_column() {
       });
     }
   }
+  log_manager.add_message(LOG_NAME, "Completed database compression", LogLevel::Info);
 }
 
-void SharedDictionariesPlugin::_print_processing_result() {
+void SharedDictionariesPlugin::_log_plugin_configuration() {
+  auto log_stream = std::stringstream();
+  log_stream << "Plugin configuration:" << std::endl
+             << "  - jaccard-index threshold = " << jaccard_index_threshold;
+  log_manager.add_message(LOG_NAME, log_stream.str(), LogLevel::Debug);
+}
+
+void SharedDictionariesPlugin::_log_processing_result() {
   const auto total_save_percentage =
       stats->total_previous_bytes == 0
           ? 0.0
@@ -47,10 +63,13 @@ void SharedDictionariesPlugin::_print_processing_result() {
           : (static_cast<double>(stats->total_bytes_saved) / static_cast<double>(stats->modified_previous_bytes)) *
                 100.0;
 
-  std::cout << "Merged " << stats->num_merged_dictionaries << " dictionaries to " << stats->num_shared_dictionaries
-            << " shared dictionaries\n";
-  std::cout << "Saved " << stats->total_bytes_saved << " bytes (" << std::ceil(modified_save_percentage)
-            << "% of modified, " << std::ceil(total_save_percentage) << "% of total)" << std::endl;
+  auto log_stream = std::stringstream();
+  log_stream << "Merged " << stats->num_merged_dictionaries << " dictionaries down to "
+             << stats->num_shared_dictionaries << " shared dictionaries" << std::endl;
+  log_stream << "Saved " << stats->total_bytes_saved << " bytes ("
+             << std::ceil(modified_save_percentage) << "% of modified, "
+             << std::ceil(total_save_percentage) << "% of total)";
+  log_manager.add_message(LOG_NAME, log_stream.str(), LogLevel::Debug);
 }
 
 template <typename T>
@@ -237,8 +256,12 @@ void SharedDictionariesColumnProcessor<T>::_process_merge_plans(
       const auto bytes_saved = previous_dictionary_memory_usage - new_dictionary_memory_usage;
       stats->total_bytes_saved += bytes_saved;
 
-      std::cout << "Merged " << segment_chunk_pairs_to_merge.size() << " dictionaries saving " << bytes_saved
-                << " bytes @ Table=" << table_name << ", Column=" << column_name << std::endl;
+      auto log_stream = std::stringstream();
+      log_stream
+          << "[Table=" << table_name << ", Column=" << column_name << "] Merged "
+          << segment_chunk_pairs_to_merge.size()  << " dictionaries saving "
+          << bytes_saved << " bytes";
+      Hyrise::get().log_manager.add_message(LOG_NAME, log_stream.str(), LogLevel::Debug);
     }
   }
 }
