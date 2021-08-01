@@ -2,6 +2,7 @@
 
 #include <gtest/gtest_prod.h>
 #include "hyrise.hpp"
+#include "shared_dictionaries_plugin_settings.hpp"
 #include "storage/dictionary_segment.hpp"
 #include "storage/table.hpp"
 #include "types.hpp"
@@ -13,7 +14,7 @@ namespace opossum {
 template <typename T>
 using SegmentChunkPair = std::pair<std::shared_ptr<DictionarySegment<T>>, std::shared_ptr<Chunk>>;
 
-/*
+/**
  * The intention of this plugin is to save memory by using "dictionary sharing"
  * while trying to not decrease the performance of Hyrise.
  *
@@ -42,10 +43,9 @@ class SharedDictionariesPlugin : public AbstractPlugin {
     uint32_t num_existing_shared_dictionaries = 0u;
   };
 
-  explicit SharedDictionariesPlugin(double init_jaccard_index_threshold = 0.1)
+  explicit SharedDictionariesPlugin()
       : storage_manager(Hyrise::get().storage_manager),
-        log_manager(Hyrise::get().log_manager),
-        jaccard_index_threshold(init_jaccard_index_threshold) {
+        log_manager(Hyrise::get().log_manager) {
     stats = std::make_shared<SharedDictionariesStats>();
   }
 
@@ -58,26 +58,10 @@ class SharedDictionariesPlugin : public AbstractPlugin {
   StorageManager& storage_manager;
   LogManager& log_manager;
 
-  // Threshold for the similarity metric between dictionaries
-  double jaccard_index_threshold;
-
   std::shared_ptr<SharedDictionariesStats> stats;
 
  private:
-  class MemoryBudgetSetting : public AbstractSetting {
-   public:
-    MemoryBudgetSetting() : AbstractSetting("Plugin::SharedDictionaries::MemoryBudget") {}
-    //    const std::string& description() const final {
-    //      static const auto description = std::string{"The memory budget (MB) to target for the CompressionPlugin."};
-    //      return description;
-    //    }
-    //    const std::string& display_name() const final { return _display_name; }
-    //    const std::string& get() final { return _value; }
-    //    void set(const std::string& value) final { _value = value; }
-    //
-    //    std::string _value = "10000";
-    //    std::string _display_name = "Memory Budget (MB)";
-  };
+  std::shared_ptr<JaccardIndexThresholdSetting> _jaccard_index_threshold_setting;
 
   void _process_for_every_column();
 
