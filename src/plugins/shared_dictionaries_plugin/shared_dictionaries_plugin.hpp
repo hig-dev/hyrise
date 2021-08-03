@@ -53,14 +53,13 @@ class SharedDictionariesPlugin : public AbstractPlugin {
 
   void stop() final;
 
+  double jaccard_index_threshold = 0.4;
   StorageManager& storage_manager;
   LogManager& log_manager;
 
   std::shared_ptr<SharedDictionariesStats> stats;
 
  private:
-  std::shared_ptr<JaccardIndexThresholdSetting> _jaccard_index_threshold_setting;
-
   void _process_for_every_column();
 
   void _log_plugin_configuration();

@@ -8,8 +8,10 @@ namespace opossum {
 std::string SharedDictionariesPlugin::description() const { return "Shared dictionaries plugin"; }
 
 void SharedDictionariesPlugin::start() {
-  _jaccard_index_threshold_setting = std::make_shared<JaccardIndexThresholdSetting>();
-  _jaccard_index_threshold_setting->register_at_settings_manager();
+  const auto env_jaccard_index_threshold = std::getenv("JACCARD_INDEX_THRESHOLD");
+  if (env_jaccard_index_threshold) {
+    jaccard_index_threshold = std::stod(env_jaccard_index_threshold);
+  }
   stats = std::make_shared<SharedDictionariesStats>();
 
   _log_plugin_configuration();
@@ -17,11 +19,10 @@ void SharedDictionariesPlugin::start() {
   _log_processing_result();
 }
 
-void SharedDictionariesPlugin::stop() { _jaccard_index_threshold_setting->unregister_at_settings_manager(); }
+void SharedDictionariesPlugin::stop() {}
 
 void SharedDictionariesPlugin::_process_for_every_column() {
   log_manager.add_message(LOG_NAME, "Starting database compression", LogLevel::Info);
-  const auto jaccard_index_threshold = std::stod(_jaccard_index_threshold_setting->get());
 
   auto table_names = storage_manager.table_names();
   std::sort(table_names.begin(), table_names.end());
@@ -54,8 +55,8 @@ void SharedDictionariesPlugin::_process_for_every_column() {
 
 void SharedDictionariesPlugin::_log_plugin_configuration() {
   auto log_stream = std::stringstream();
-  log_stream << "Plugin configuration:" << std::endl
-             << "  - jaccard-index threshold = " << _jaccard_index_threshold_setting->get();
+  log_stream << "Plugin configuration:" << std::endl << "  - jaccard-index threshold = " << jaccard_index_threshold;
+  std::cout << log_stream.str() << std::endl;
   log_manager.add_message(LOG_NAME, log_stream.str(), LogLevel::Debug);
 }
 
@@ -77,6 +78,7 @@ void SharedDictionariesPlugin::_log_processing_result() {
              << stats->num_existing_merged_dictionaries << " dictionary encoded segments" << std::endl;
   log_stream << "Saved " << stats->total_bytes_saved << " bytes (" << std::ceil(modified_save_percentage)
              << "% of modified, " << std::ceil(total_save_percentage) << "% of total)";
+  std::cout << log_stream.str() << std::endl;
   log_manager.add_message(LOG_NAME, log_stream.str(), LogLevel::Debug);
 }
 

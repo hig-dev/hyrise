@@ -55,6 +55,19 @@ BenchmarkRunner::BenchmarkRunner(const BenchmarkConfig& config,
 
   _table_generator->generate_and_store();
 
+  // START: Modification for benchmark of SharedDictionariesPlugin
+  auto enable_shared_dictionaries_plugin = false;
+  const auto env_shared_dictionaries_plugin = std::getenv("SHARED_DICTIONARIES_PLUGIN");
+  if (env_shared_dictionaries_plugin) {
+    std::cout << "- SharedDictionariesPlugin: enabled" << std::endl;
+    auto& pm = Hyrise::get().plugin_manager;
+    pm.load_plugin(env_shared_dictionaries_plugin);
+    pm.unload_plugin("hyriseSharedDictionariesPlugin");
+  } else{
+    std::cout << "- SharedDictionariesPlugin: disabled" << std::endl;
+  }
+  // END: Modification for benchmark of SharedDictionariesPlugin
+
   _benchmark_item_runner->on_tables_loaded();
 
   // SQLite data is only loaded if the dedicated result set is not complete, i.e,
