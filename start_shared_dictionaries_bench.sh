@@ -1,17 +1,23 @@
+#!/bin/bash
+
 echo "Build plugin"
-cmake --build ./cmake-build-release --target hyriseSharedDictionariesPlugin --
+mkdir -p ./cmake-build-release
+cd ./cmake-build-release
+cmake -DCMAKE_BUILD_TYPE=Release ..
+cd ..
+cmake --build ./cmake-build-release --target hyriseSharedDictionariesPlugin -- -j "$(getconf _NPROCESSORS_ONLN)"
 
 echo "Build benchmark"
-cmake --build ./cmake-build-release --target hyriseBenchmarkJoinOrder --
+cmake --build ./cmake-build-release --target hyriseBenchmarkJoinOrder -- -j "$(getconf _NPROCESSORS_ONLN)"
 export HYRISE_BENCH_BIN="./cmake-build-release/hyriseBenchmarkJoinOrder"
 
 echo "Verify"
 export SHARED_DICTIONARIES_PLUGIN="./cmake-build-release/lib/libhyriseSharedDictionariesPlugin.so"
-$HYRISE_BENCH_BIN --verify -r 1 --enable_dictionary_sharing > output_verify.log
+#$HYRISE_BENCH_BIN --verify -r 1 > output_verify.log
 
 echo "Run base benchmark"
 unset SHARED_DICTIONARIES_PLUGIN
-$HYRISE_BENCH_BIN --output bench_result_base.json -r 100 > output_base.log
+#$HYRISE_BENCH_BIN --output bench_result_base.json -r 100 > output_base.log
 
 # Reset plugin path
 export SHARED_DICTIONARIES_PLUGIN="./cmake-build-release/lib/libhyriseSharedDictionariesPlugin.so"

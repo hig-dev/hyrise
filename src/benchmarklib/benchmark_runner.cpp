@@ -56,7 +56,6 @@ BenchmarkRunner::BenchmarkRunner(const BenchmarkConfig& config,
   _table_generator->generate_and_store();
 
   // START: Modification for benchmark of SharedDictionariesPlugin
-  auto enable_shared_dictionaries_plugin = false;
   const auto env_shared_dictionaries_plugin = std::getenv("SHARED_DICTIONARIES_PLUGIN");
   if (env_shared_dictionaries_plugin) {
     std::cout << "- SharedDictionariesPlugin: enabled" << std::endl;
