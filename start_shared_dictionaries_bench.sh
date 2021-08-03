@@ -13,11 +13,11 @@ export HYRISE_BENCH_BIN="./cmake-build-release/hyriseBenchmarkJoinOrder"
 
 echo "Verify"
 export SHARED_DICTIONARIES_PLUGIN="./cmake-build-release/lib/libhyriseSharedDictionariesPlugin.so"
-#$HYRISE_BENCH_BIN --verify -r 1 > output_verify.log
+$HYRISE_BENCH_BIN --verify -r 1 > output_verify.log
 
 echo "Run base benchmark"
 unset SHARED_DICTIONARIES_PLUGIN
-#$HYRISE_BENCH_BIN --output bench_result_base.json -r 100 > output_base.log
+$HYRISE_BENCH_BIN --output bench_result_base.json -r 100 > output_base.log
 
 # Reset plugin path
 export SHARED_DICTIONARIES_PLUGIN="./cmake-build-release/lib/libhyriseSharedDictionariesPlugin.so"
